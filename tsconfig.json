@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    // TypeScript 6.0.2 — ESNext target enables the latest JS features and lib types
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    // Bun-specific module resolution
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    // Strict type checking
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedSideEffectImports": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    // Emit configuration
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    // Bun types — explicit list required (TS 6.0 defaults types to [])
+    "types": ["bun-types"],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "bin/**/*.ts", "tests/**/*.ts", "examples/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

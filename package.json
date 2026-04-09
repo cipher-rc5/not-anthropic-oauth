@@ -1,0 +1,22 @@
+{
+  "name": "anthropic-oauth",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run bin/cli.ts",
+    "sync": "bun run bin/sync-to-opencode.ts",
+    "typecheck": "bunx --bun tsc --noEmit",
+    "format": "bunx --bun dprint fmt",
+    "format:check": "bunx --bun dprint check",
+    "lint": "bun run typecheck && bun run format:check"
+  },
+  "dependencies": {
+    "@openauthjs/openauth": "0.4.3",
+    "effect": "3.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.11",
+    "dprint": "0.53.2",
+    "typescript": "6.0.2"
+  }
+}
