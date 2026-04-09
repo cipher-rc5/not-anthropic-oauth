@@ -36,7 +36,7 @@ const main = Effect.gen(function*() {
   }
 
   console.log('[OK] Environment variables set:');
-  console.log(`  ANTHROPIC_API_KEY: ${apiKey.slice(0, 8)}...`);
+  console.log(`  ANTHROPIC_API_KEY: ${apiKey ? '[REDACTED]' : 'not set'}`);
   console.log(`  OPENCODE_PROVIDER: ${provider}`);
   console.log(`  OPENCODE_MODEL: ${model}\n`);
 

@@ -34,7 +34,7 @@ const main = Effect.gen(function*() {
   console.log('[OK] Config retrieved');
   console.log(`   Provider: ${config.provider}`);
   console.log(`   Model: ${config.model}`);
-  console.log(`   API Key: ${config.apiKey.slice(0, 20)}...\n`);
+  console.log(`   API Key: [REDACTED]\n`);
 
   // 3. Export to environment
   console.log('3.  Exporting to environment variables...');
@@ -42,7 +42,7 @@ const main = Effect.gen(function*() {
 
   // Verify environment variables
   console.log('\n   Environment variables set:');
-  console.log(`   - ANTHROPIC_API_KEY: ${process.env['ANTHROPIC_API_KEY']?.slice(0, 20)}...`);
+  console.log(`   - ANTHROPIC_API_KEY: ${process.env['ANTHROPIC_API_KEY'] ? '[REDACTED]' : 'not set'}`);
   console.log(`   - OPENCODE_PROVIDER: ${process.env['OPENCODE_PROVIDER']}`);
   console.log(`   - OPENCODE_MODEL: ${process.env['OPENCODE_MODEL']}\n`);
 
