@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-bun.lock
+# bun.lock should be committed for reproducible builds
 
 # Build outputs
 dist/
@@ -37,3 +37,5 @@ yarn-error.log*
 # Cache
 .cache/
 *.tsbuildinfo
+
+_dev
