@@ -104,7 +104,9 @@ describe('credential store', () => {
     const cred: Credentials = { type: 'api_key', key: 'sk-ant-perms' };
     await Effect.runPromise(saveCredentials(cred));
     const path = `${TMP_HOME}/.config/anthropic-oauth/credentials.json`;
-    const stat = await Bun.$`stat -f %Lp ${path}`.text();
+    // Use platform-appropriate stat command (macOS vs Linux)
+    const isMac = process.platform === 'darwin';
+    const stat = isMac ? await Bun.$`stat -f %Lp ${path}`.text() : await Bun.$`stat -c %a ${path}`.text();
     expect(stat.trim()).toBe('600');
   });
 
