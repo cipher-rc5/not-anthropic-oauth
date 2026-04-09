@@ -19,9 +19,10 @@ BY USING THIS SOFTWARE, YOU ACKNOWLEDGE AND AGREE THAT:
 
 ## Third-Party Services
 
-This software may interact with third-party services, including but not limited to Anthropic's Claude API. 
+This software may interact with third-party services, including but not limited to Anthropic's Claude API.
 
 **IMPORTANT NOTICE:**
+
 - This project is **NOT affiliated with, endorsed by, or sponsored by Anthropic PBC**
 - Use of Anthropic's services is subject to Anthropic's Terms of Service and Acceptable Use Policy
 - **You are responsible** for ensuring your use complies with all applicable terms of service, laws, and regulations
@@ -30,6 +31,7 @@ This software may interact with third-party services, including but not limited 
 ## Compliance
 
 Users are solely responsible for:
+
 - Complying with all applicable local, state, national, and international laws and regulations
 - Obtaining all necessary permissions, licenses, and authorizations
 - Ensuring their use does not violate any third-party rights or agreements
