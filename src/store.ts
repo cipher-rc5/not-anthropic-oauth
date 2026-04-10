@@ -36,22 +36,36 @@ const isApiKeyCredentials = (v: unknown): v is ApiKeyCredentials =>
 export const isCredentials = (v: unknown): v is Credentials => isOAuthCredentials(v) || isApiKeyCredentials(v);
 
 // ---------------------------------------------------------------------------
+// In-memory credential cache
+// Eliminates a disk read from the hot path of every authenticatedFetch call.
+// Invalidated whenever credentials are written or cleared.
+// ---------------------------------------------------------------------------
+
+let credentialCache: Option.Option<Credentials> | null = null;
+
+// ---------------------------------------------------------------------------
 // Store operations
 // ---------------------------------------------------------------------------
 
 export const loadCredentials: Effect.Effect<Option.Option<Credentials>, StorageError> = Effect.tryPromise({
   try: async () => {
+    // Return cached value if available — avoids disk I/O on every API call
+    if (credentialCache !== null) return credentialCache;
+
     try {
       const file = Bun.file(getCredentialsPath());
       const raw = await file.text();
       const parsed: unknown = JSON.parse(raw);
       if (!isCredentials(parsed)) {
         // Corrupt or unknown format — treat as missing rather than throwing
-        return Option.none();
+        credentialCache = Option.none();
+        return credentialCache;
       }
-      return Option.some(parsed);
+      credentialCache = Option.some(parsed);
+      return credentialCache;
     } catch {
-      return Option.none();
+      credentialCache = Option.none();
+      return credentialCache;
     }
   },
   catch: cause => new StorageError({ message: 'Failed to load credentials', cause })
@@ -71,6 +85,9 @@ export const saveCredentials = (credentials: Credentials): Effect.Effect<void, S
 
       // Restrict to owner read/write only — documentation claimed 0600 but code never set it
       await Bun.$`chmod 600 ${credPath}`.quiet();
+
+      // Update cache so subsequent loadCredentials calls don't re-read disk
+      credentialCache = Option.some(credentials);
     },
     catch: cause => new StorageError({ message: 'Failed to save credentials', cause })
   });
@@ -78,6 +95,8 @@ export const saveCredentials = (credentials: Credentials): Effect.Effect<void, S
 export const clearCredentials: Effect.Effect<void, StorageError> = Effect.tryPromise({
   try: async () => {
     await Bun.$`rm -f ${getCredentialsPath()}`.quiet();
+    // Invalidate cache
+    credentialCache = Option.none();
   },
   catch: cause => new StorageError({ message: 'Failed to clear credentials', cause })
 });

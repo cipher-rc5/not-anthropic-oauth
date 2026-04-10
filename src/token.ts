@@ -33,15 +33,17 @@ const isApiKeyResponse = (v: unknown): v is { raw_key: string } =>
 interface RetryOptions {
   readonly maxAttempts: number;
   readonly baseDelayMs: number;
+  /** Per-attempt timeout in ms. Defaults to 10 000ms (10s). */
+  readonly timeoutMs: number;
 }
 
-const DEFAULT_RETRY: RetryOptions = { maxAttempts: 3, baseDelayMs: 250 };
+const DEFAULT_RETRY: RetryOptions = { maxAttempts: 3, baseDelayMs: 250, timeoutMs: 10_000 };
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Wraps a fetch call with exponential-backoff retry.
- * Retries on network errors (status 0) and 5xx server errors.
+ * Wraps a fetch call with exponential-backoff retry and a per-attempt timeout.
+ * Retries on network errors (status 0), 5xx server errors, and timeouts.
  * 4xx errors are not retried (they indicate a client-side problem).
  */
 const fetchWithRetry = async (
@@ -50,13 +52,16 @@ const fetchWithRetry = async (
   opts: RetryOptions = DEFAULT_RETRY
 ): Promise<Response> => {
   let lastError: unknown;
-  for (let attempt = 0;attempt < opts.maxAttempts;attempt++) {
+  for (let attempt = 0; attempt < opts.maxAttempts; attempt++) {
     if (attempt > 0) {
       // 2^(attempt-1) * baseDelayMs: 250ms, 500ms, 1000ms, …
       await sleep(opts.baseDelayMs * Math.pow(2, attempt - 1));
     }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
     try {
-      const response = await fetch(url, init);
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timer);
       // Do not retry client errors (4xx) — they need a code-level fix
       if (response.status >= 400 && response.status < 500) return response;
       // Retry server errors
@@ -66,8 +71,11 @@ const fetchWithRetry = async (
       }
       return response;
     } catch (err) {
-      // Network-level failure (DNS, connection refused, timeout)
-      lastError = err;
+      clearTimeout(timer);
+      // Network-level failure (DNS, connection refused, timeout / abort)
+      lastError = err instanceof Error && err.name === 'AbortError'
+        ? new Error(`Request timed out after ${opts.timeoutMs}ms`)
+        : err;
     }
   }
   throw lastError;

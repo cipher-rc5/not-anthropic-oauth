@@ -10,7 +10,7 @@ import { InvalidCredentialsError, StorageError, TokenRefreshError } from './erro
 import { loadCredentials, saveCredentials } from './store.ts';
 import { refreshAccessToken } from './token.ts';
 import type { Credentials, OAuthCredentials } from './types.ts';
-import { REQUIRED_BETAS } from './types.ts';
+import { INTERLEAVED_THINKING_BETA, REQUIRED_BETAS } from './types.ts';
 
 // Anthropic's OAuth endpoints require claude-cli user-agent to avoid 429 rate limiting
 // Reference: https://github.com/anomalyco/opencode/issues/18329
@@ -18,12 +18,15 @@ const DEFAULT_USER_AGENT = 'claude-cli/2.1.2';
 
 const getUserAgent = (): string => process.env['ANTHROPIC_USER_AGENT'] ?? DEFAULT_USER_AGENT;
 
-const mergeBetaHeaders = (existing: string | null): string => {
+const mergeBetaHeaders = (existing: string | null, enableInterleavedThinking: boolean): string => {
   const incoming = existing ? existing.split(',').map(b => b.trim()).filter(Boolean) : [];
-  return [...new Set([...REQUIRED_BETAS, ...incoming])].join(',');
+  const base = enableInterleavedThinking
+    ? [...REQUIRED_BETAS, INTERLEAVED_THINKING_BETA]
+    : [...REQUIRED_BETAS];
+  return [...new Set([...base, ...incoming])].join(',');
 };
 
-const buildHeaders = (source: HeadersInit | undefined, credentials: Credentials): Headers => {
+const buildHeaders = (source: HeadersInit | undefined, credentials: Credentials, enableInterleavedThinking: boolean): Headers => {
   const headers = new Headers();
 
   if (source instanceof Headers) {
@@ -50,7 +53,7 @@ const buildHeaders = (source: HeadersInit | undefined, credentials: Credentials)
   if (!headers.has('anthropic-version')) {
     headers.set('anthropic-version', '2023-06-01');
   }
-  headers.set('anthropic-beta', mergeBetaHeaders(headers.get('anthropic-beta')));
+  headers.set('anthropic-beta', mergeBetaHeaders(headers.get('anthropic-beta'), enableInterleavedThinking));
   headers.set('user-agent', getUserAgent());
 
   return headers;
@@ -94,18 +97,41 @@ const isMessageBody = (v: unknown): v is MessageBody => isObject(v);
 
 const TOOL_PREFIX = 'mcp_';
 
-const transformBody = (raw: string): string => {
+/**
+ * Returns true if the parsed request body contains a `thinking` configuration
+ * block, indicating the caller has explicitly opted into extended thinking.
+ * Used to auto-enable the interleaved-thinking beta header.
+ */
+const bodyRequestsThinking = (parsed: MessageBody): boolean => {
+  const thinking = parsed['thinking'];
+  return (
+    isObject(thinking) &&
+    (thinking as Record<string, unknown>)['type'] === 'enabled'
+  );
+};
+
+const transformBody = (raw: string): { body: string; hasThinking: boolean } => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return raw;
+    return { body: raw, hasThinking: false };
   }
 
-  if (!isMessageBody(parsed)) return raw;
+  if (!isMessageBody(parsed)) return { body: raw, hasThinking: false };
+
+  // Short-circuit: skip transform if none of the affected keys are present
+  const hasSystem = 'system' in parsed;
+  const hasTools = 'tools' in parsed;
+  const hasMessages = 'messages' in parsed;
+  const hasThinking = bodyRequestsThinking(parsed);
+
+  if (!hasSystem && !hasTools && !hasMessages) {
+    return { body: raw, hasThinking };
+  }
 
   // Sanitize system prompt — server blocks "OpenCode" string
-  if (isContentBlockArray(parsed['system'])) {
+  if (hasSystem && isContentBlockArray(parsed['system'])) {
     parsed['system'] = parsed['system'].map(item =>
       isTextBlock(item) ?
         { ...item, text: item.text.replace(/OpenCode/g, 'Claude Code').replace(/opencode/gi, 'Claude') } :
@@ -113,25 +139,29 @@ const transformBody = (raw: string): string => {
     );
   }
 
-  // Prefix tool definitions with mcp_
-  if (Array.isArray(parsed['tools'])) {
+  // Prefix tool definitions with mcp_ (idempotent — skip if already prefixed)
+  if (hasTools && Array.isArray(parsed['tools'])) {
     parsed['tools'] = (parsed['tools'] as Array<{ name?: string } & Record<string, unknown>>).map(tool =>
-      typeof tool['name'] === 'string' ? { ...tool, name: `${TOOL_PREFIX}${tool['name']}` } : tool
+      typeof tool['name'] === 'string' && !tool['name'].startsWith(TOOL_PREFIX)
+        ? { ...tool, name: `${TOOL_PREFIX}${tool['name']}` }
+        : tool
     );
   }
 
-  // Prefix tool_use content blocks with mcp_
-  if (Array.isArray(parsed['messages'])) {
+  // Prefix tool_use content blocks with mcp_ (idempotent)
+  if (hasMessages && Array.isArray(parsed['messages'])) {
     parsed['messages'] = (parsed['messages'] as Array<Record<string, unknown>>).map(msg => {
       if (!isContentBlockArray(msg['content'])) return msg;
       const transformedContent: ContentBlock[] = msg['content'].map(block =>
-        isToolUseBlock(block) ? { ...block, name: `${TOOL_PREFIX}${block['name']}` } : block
+        isToolUseBlock(block) && !block['name'].startsWith(TOOL_PREFIX)
+          ? { ...block, name: `${TOOL_PREFIX}${block['name']}` }
+          : block
       );
       return { ...msg, content: transformedContent };
     });
   }
 
-  return JSON.stringify(parsed);
+  return { body: JSON.stringify(parsed), hasThinking };
 };
 
 // ---------------------------------------------------------------------------
@@ -179,9 +209,20 @@ const ensureFreshToken = (
     }
   });
 
+export interface AuthenticatedFetchOptions extends RequestInit {
+  /**
+   * Opt into Claude's extended thinking (interleaved-thinking) feature.
+   * When true, the `interleaved-thinking-2025-05-14` beta header is added.
+   * This is also auto-enabled when the request body contains a `thinking`
+   * block with `type: "enabled"`.
+   * Reference: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+   */
+  enableInterleavedThinking?: boolean;
+}
+
 export const authenticatedFetch = (
   input: RequestInfo | URL,
-  init?: RequestInit
+  init?: AuthenticatedFetchOptions
 ): Effect.Effect<Response, InvalidCredentialsError | TokenRefreshError | StorageError> =>
   Effect.gen(function*() {
     const stored = yield* loadCredentials;
@@ -200,13 +241,19 @@ export const authenticatedFetch = (
     }
 
     const requestInit = init ?? {};
-    const headers = buildHeaders(requestInit.headers, finalCredentials);
+    const { enableInterleavedThinking: explicitThinking, ...fetchInit } = requestInit;
 
-    // Transform request body for OAuth compatibility
-    let body = requestInit.body;
+    // Transform request body for OAuth compatibility; detect thinking opt-in
+    let body = fetchInit.body;
+    let bodyRequestedThinking = false;
     if (credentials.type === 'oauth' && body && typeof body === 'string') {
-      body = transformBody(body);
+      const result = transformBody(body);
+      body = result.body;
+      bodyRequestedThinking = result.hasThinking;
     }
+
+    const useThinking = explicitThinking === true || bodyRequestedThinking;
+    const headers = buildHeaders(fetchInit.headers, finalCredentials, useThinking);
 
     let requestInput = input;
     if (finalCredentials.type === 'oauth') {
@@ -223,7 +270,7 @@ export const authenticatedFetch = (
     }
 
     return yield* Effect.tryPromise({
-      try: () => fetch(requestInput, { ...requestInit, ...(body !== undefined ? { body } : {}), headers }),
+      try: () => fetch(requestInput, { ...fetchInit, ...(body !== undefined ? { body } : {}), headers }),
       catch: cause => new InvalidCredentialsError({ message: String(cause) })
     });
   });

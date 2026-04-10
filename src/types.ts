@@ -41,4 +41,11 @@ export const getClientId = (): string => process.env['ANTHROPIC_CLIENT_ID'] ?? D
 
 export const ANTHROPIC_OAUTH_URL = 'https://console.anthropic.com/v1/oauth/token' as const;
 
-export const REQUIRED_BETAS = ['oauth-2025-04-20', 'interleaved-thinking-2025-05-14'] as const;
+// Betas that are always injected for OAuth compatibility.
+export const REQUIRED_BETAS = ['oauth-2025-04-20'] as const;
+
+// The interleaved-thinking beta activates Claude's extended thinking feature.
+// It is opt-in: pass `enableInterleavedThinking: true` to `authenticatedFetch`
+// options, or include a `thinking` block in your request body.
+// Reference: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+export const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14' as const;
