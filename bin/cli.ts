@@ -218,7 +218,7 @@ const menu = async (): Promise<void> => {
         break;
       }
 
-      const testModel = 'claude-sonnet-4-6-20250514';
+      const testModel = 'claude-haiku-4-5';
 
       await Effect.runPromise(
         Effect.gen(function*() {

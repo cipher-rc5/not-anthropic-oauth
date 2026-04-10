@@ -2,6 +2,12 @@
   "name": "anthropic-oauth",
   "version": "0.1.0",
   "type": "module",
+  "id": "anthropic-oauth",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/plugin.ts",
+    "./plugin": "./src/plugin.ts"
+  },
   "scripts": {
     "dev": "bun run bin/cli.ts",
     "sync": "bun run bin/sync-to-opencode.ts",
