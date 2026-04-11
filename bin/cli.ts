@@ -8,7 +8,7 @@
 
 import { Effect, Option } from 'effect';
 import { authenticatedFetch } from '../src/client.ts';
-import { checkCredentialValidity, exportToEnvironment } from '../src/opencode.ts';
+import { checkCredentialValidity, exportToEnvironment, getDefaultModel } from '../src/opencode.ts';
 import { beginOAuth, completeApiKeyLogin, completeOAuthLogin, getStoredCredentials, logout, saveApiKey } from '../src/service.ts';
 import type { Credentials } from '../src/types.ts';
 
@@ -72,8 +72,6 @@ const printCredentials = (creds: Credentials | null): void => {
     process.stdout.write(`Type    : api_key\n`);
     process.stdout.write(`Status  : [Valid] (no expiration)\n`);
     process.stdout.write(`Key     : ${creds.key}\n`);
-    // to cover api-key use:
-    // process.stdout.write(`Key     : ${creds.key}\n`);
   }
 };
 
@@ -98,175 +96,176 @@ const runMenu = async (): Promise<void> => {
 
     const choice = await ask('\nChoice:');
 
-  switch (choice) {
-    case '1': {
-      const run = Effect.gen(function*() {
-        const { url, verifier } = yield* beginOAuth('max');
-        // URL display is interactive UI, not a log message
-        process.stdout.write('\nOpen this URL in your browser:\n\n');
-        process.stdout.write(url + '\n');
-        const code = yield* askEffect('\nPaste the authorization code:');
-        const creds = yield* completeOAuthLogin(code, verifier);
-        yield* Effect.logInfo('Login successful. Credentials saved.');
-        return creds;
-      });
-
-      const result = await Effect.runPromise(run.pipe(Effect.catchAll(e =>
-        Effect.gen(function*() {
-          yield* Effect.logError(`Login failed: ${String(e)}`);
-          return null;
-        })
-      )));
-
-      if (result) {
-        printCredentials(result);
-        await Effect.runPromise(
-          exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
-        );
-      }
-      break;
-    }
-
-    case '2': {
-      const run = Effect.gen(function*() {
-        const { url, verifier } = yield* beginOAuth('console');
-        process.stdout.write('\nOpen this URL in your browser:\n\n');
-        process.stdout.write(url + '\n');
-        const code = yield* askEffect('\nPaste the authorization code:');
-        const creds = yield* completeApiKeyLogin(code, verifier);
-        yield* Effect.logInfo('API key created and saved.');
-        return creds;
-      });
-
-      const result = await Effect.runPromise(run.pipe(Effect.catchAll(e =>
-        Effect.gen(function*() {
-          yield* Effect.logError(`Login failed: ${String(e)}`);
-          return null;
-        })
-      )));
-
-      if (result) {
-        printCredentials(result);
-        await Effect.runPromise(
-          exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
-        );
-      }
-      break;
-    }
-
-    case '3': {
-      const key = await ask('Paste your API key:');
-      const saved = await Effect.runPromise(
-        Effect.gen(function*() {
-          const creds = yield* saveApiKey(key);
-          yield* Effect.logInfo('API key saved.');
+    switch (choice) {
+      case '1': {
+        const run = Effect.gen(function*() {
+          const { url, verifier } = yield* beginOAuth('max');
+          // URL display is interactive UI, not a log message
+          process.stdout.write('\nOpen this URL in your browser:\n\n');
+          process.stdout.write(url + '\n');
+          const code = yield* askEffect('\nPaste the authorization code:');
+          const creds = yield* completeOAuthLogin(code, verifier);
+          yield* Effect.logInfo('Login successful. Credentials saved.');
           return creds;
-        }).pipe(Effect.catchAll(e =>
+        });
+
+        const result = await Effect.runPromise(run.pipe(Effect.catchAll(e =>
           Effect.gen(function*() {
-            yield* Effect.logError(`Save failed: ${String(e)}`);
+            yield* Effect.logError(`Login failed: ${String(e)}`);
             return null;
           })
-        ))
-      );
+        )));
 
-      if (saved) {
-        await Effect.runPromise(
-          exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
-        );
-      }
-      break;
-    }
-
-    case '4': {
-      const creds = await Effect.runPromise(
-        getStoredCredentials.pipe(
-          Effect.map(Option.getOrNull),
-          Effect.catchAll(e =>
-            Effect.gen(function*() {
-              yield* Effect.logError(`Storage error: ${String(e)}`);
-              return null;
-            })
-          )
-        )
-      );
-      printCredentials(creds);
-
-      if (creds) {
-        const validity = await Effect.runPromise(
-          checkCredentialValidity().pipe(Effect.catchAll(e =>
-            Effect.gen(function*() {
-              yield* Effect.logWarning(`Validity check failed: ${String(e)}`);
-              return { valid: false as const };
-            })
-          ))
-        );
-        if ('expiresIn' in validity && validity.expiresIn !== undefined) {
+        if (result) {
+          printCredentials(result);
           await Effect.runPromise(
-            Effect.logInfo(`Token will expire in ${Math.floor(validity.expiresIn / 60)} minutes`)
+            exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
           );
         }
-      }
-      break;
-    }
-
-    case '5': {
-      process.stdout.write('\nSending test request to /v1/messages...\n');
-
-      const testCreds = await Effect.runPromise(
-        getStoredCredentials.pipe(Effect.map(Option.getOrNull), Effect.catchAll(() => Effect.succeed(null)))
-      );
-
-      if (!testCreds) {
-        await Effect.runPromise(Effect.logError('No credentials stored. Login first.'));
         break;
       }
 
-      const testModel = 'claude-haiku-4-5';
+      case '2': {
+        const run = Effect.gen(function*() {
+          const { url, verifier } = yield* beginOAuth('console');
+          process.stdout.write('\nOpen this URL in your browser:\n\n');
+          process.stdout.write(url + '\n');
+          const code = yield* askEffect('\nPaste the authorization code:');
+          const creds = yield* completeApiKeyLogin(code, verifier);
+          yield* Effect.logInfo('API key created and saved.');
+          return creds;
+        });
 
-      await Effect.runPromise(
-        Effect.gen(function*() {
-          yield* Effect.logInfo(`Auth type: ${testCreds.type}`);
-          yield* Effect.logInfo(`Model: ${testModel}`);
+        const result = await Effect.runPromise(run.pipe(Effect.catchAll(e =>
+          Effect.gen(function*() {
+            yield* Effect.logError(`Login failed: ${String(e)}`);
+            return null;
+          })
+        )));
 
-          const res = yield* authenticatedFetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: testModel,
-              max_tokens: 64,
-              messages: [{ role: 'user', content: 'Say hello in one sentence.' }]
+        if (result) {
+          printCredentials(result);
+          await Effect.runPromise(
+            exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
+          );
+        }
+        break;
+      }
+
+      case '3': {
+        const key = await ask('Paste your API key:');
+        const saved = await Effect.runPromise(
+          Effect.gen(function*() {
+            const creds = yield* saveApiKey(key);
+            yield* Effect.logInfo('API key saved.');
+            return creds;
+          }).pipe(Effect.catchAll(e =>
+            Effect.gen(function*() {
+              yield* Effect.logError(`Save failed: ${String(e)}`);
+              return null;
             })
-          });
+          ))
+        );
 
-          const json: unknown = yield* Effect.tryPromise({
-            try: () => res.json() as Promise<unknown>,
-            catch: () => new Error('parse failed')
-          });
+        if (saved) {
+          await Effect.runPromise(
+            exportToEnvironment().pipe(Effect.catchAll(e => Effect.logWarning(`OpenCode export failed: ${String(e)}`)))
+          );
+        }
+        break;
+      }
 
-          yield* Effect.logInfo(`HTTP Status: ${res.status}`);
-          // Response body is interactive output, not a structured log
-          process.stdout.write('Response:\n' + JSON.stringify(json, null, 2) + '\n');
-        }).pipe(Effect.catchAll(e => Effect.logError(`Request failed: ${String(e)}`)))
-      );
-      break;
+      case '4': {
+        const creds = await Effect.runPromise(
+          getStoredCredentials.pipe(
+            Effect.map(Option.getOrNull),
+            Effect.catchAll(e =>
+              Effect.gen(function*() {
+                yield* Effect.logError(`Storage error: ${String(e)}`);
+                return null;
+              })
+            )
+          )
+        );
+        printCredentials(creds);
+
+        if (creds) {
+          const validity = await Effect.runPromise(
+            checkCredentialValidity().pipe(Effect.catchAll(e =>
+              Effect.gen(function*() {
+                yield* Effect.logWarning(`Validity check failed: ${String(e)}`);
+                return { valid: false as const };
+              })
+            ))
+          );
+          if ('expiresIn' in validity && validity.expiresIn !== undefined) {
+            await Effect.runPromise(
+              Effect.logInfo(`Token will expire in ${Math.floor(validity.expiresIn / 60)} minutes`)
+            );
+          }
+        }
+        break;
+      }
+
+      case '5': {
+        process.stdout.write('\nSending test request to /v1/messages...\n');
+
+        const testCreds = await Effect.runPromise(
+          getStoredCredentials.pipe(Effect.map(Option.getOrNull), Effect.catchAll(() => Effect.succeed(null)))
+        );
+
+        if (!testCreds) {
+          await Effect.runPromise(Effect.logError('No credentials stored. Login first.'));
+          break;
+        }
+
+        const testModel = getDefaultModel();
+
+        await Effect.runPromise(
+          Effect.gen(function*() {
+            yield* Effect.logInfo(`Auth type: ${testCreds.type}`);
+            yield* Effect.logInfo(`Model: ${testModel}`);
+
+            const res = yield* authenticatedFetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: testModel,
+                max_tokens: 64,
+                messages: [{ role: 'user', content: 'Say hello in one sentence.' }]
+              })
+            });
+
+            const json: unknown = yield* Effect.tryPromise({
+              try: () => res.json() as Promise<unknown>,
+              catch: () => new Error('parse failed')
+            });
+
+            yield* Effect.logInfo(`HTTP Status: ${res.status}`);
+            // Response body is interactive output, not a structured log
+            process.stdout.write('Response:\n' + JSON.stringify(json, null, 2) + '\n');
+          }).pipe(Effect.catchAll(e => Effect.logError(`Request failed: ${String(e)}`)))
+        );
+        break;
+      }
+
+      case '6': {
+        await Effect.runPromise(
+          Effect.gen(function*() {
+            yield* logout;
+            yield* Effect.logInfo('Logged out.');
+          }).pipe(Effect.catchAll(e => Effect.logError(`Logout error: ${String(e)}`)))
+        );
+        break;
+      }
+
+      case '0':
+        process.stdin.pause();
+        return;
+
+      default:
+        process.stdout.write('Unknown option.\n');
     }
-
-    case '6': {
-      await Effect.runPromise(
-        Effect.gen(function*() {
-          yield* logout;
-          yield* Effect.logInfo('Logged out.');
-        }).pipe(Effect.catchAll(e => Effect.logError(`Logout error: ${String(e)}`)))
-      );
-      break;
-    }
-
-    case '0':
-      process.exit(0);
-
-    default:
-      process.stdout.write('Unknown option.\n');
-  }
   } // end while
 };
 

@@ -44,11 +44,15 @@ Your Bun + Effect-TS codebase is configured with strict type safety and modern t
 bun run dev              # Run interactive CLI
 bun run sync             # Sync credentials to OpenCode
 
+# Build
+bun run build            # Bundle src/index.ts to dist/ (target: bun)
+
 # Code Quality
 bun run typecheck        # Type checking — TypeScript 6.0 (no emit)
 bun run format           # Format all files with dprint
 bun run format:check     # Check formatting without changes
 bun run lint             # Run typecheck + format check
+bun run ci               # Full CI gate: lint + test + build
 ```
 
 ### File Header Template
@@ -96,17 +100,19 @@ anthropic-oauth/
 │   ├── cli.ts                  # Interactive CLI
 │   └── sync-to-opencode.ts     # OpenCode credential sync
 ├── src/
-│   ├── types.ts                # Domain types and constants
-│   ├── errors.ts               # Tagged error definitions
+│   ├── types.ts                # Domain types, constants, env helpers
+│   ├── errors.ts               # Tagged error definitions (8 classes)
 │   ├── pkce.ts                 # PKCE challenge generation
 │   ├── token.ts                # OAuth token operations
 │   ├── store.ts                # Credential storage (Bun APIs)
+│   ├── cch.ts                  # Content Consistency Hashing (billing header)
+│   ├── utils.ts                # Header merging, URL rewriting, stream stripping
 │   ├── client.ts               # Authenticated fetch client
 │   ├── service.ts              # High-level service API
 │   ├── opencode.ts             # OpenCode integration helpers
-│   ├── plugin.ts               # Global fetch user-agent plugin
+│   ├── plugin.ts               # OpenCode server plugin + legacy fetch patcher
 │   └── index.ts                # Public exports
-├── tests/                      # Bun test suite (100 tests)
+├── tests/                      # Bun test suite
 ├── examples/                   # Usage examples
 ├── docs/                       # Documentation
 ├── .opencode/
@@ -114,7 +120,7 @@ anthropic-oauth/
 ├── tsconfig.json               # TypeScript 6.0 configuration
 ├── dprint.json                 # Formatting rules
 ├── .gitmessage                 # Commit template
-└── package.json                # Bun package config
+└── package.json                # Bun package config (engines: bun >=1.3.12)
 ```
 
 ### Key Conventions

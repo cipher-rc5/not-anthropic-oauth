@@ -43,25 +43,27 @@ const DEFAULT_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e' as const;
 export const getClientId = (): string => process.env['ANTHROPIC_CLIENT_ID'] ?? DEFAULT_CLIENT_ID;
 
 // ---------------------------------------------------------------------------
+// API paths
+// ---------------------------------------------------------------------------
+
+/** The Anthropic messages endpoint path — used to gate OAuth beta routing. */
+export const MESSAGES_PATH = '/v1/messages' as const;
+
+// ---------------------------------------------------------------------------
 // OAuth endpoints — platform.claude.com domain
 // ---------------------------------------------------------------------------
 
 export const ANTHROPIC_OAUTH_URL = 'https://platform.claude.com/v1/oauth/token' as const;
 
-export const OAUTH_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback' as const;
+const OAUTH_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback' as const;
+export { OAUTH_REDIRECT_URI };
 
 // ---------------------------------------------------------------------------
 // Beta headers
 // ---------------------------------------------------------------------------
 
 // Betas always injected for OAuth compatibility.
-export const REQUIRED_BETAS = ['oauth-2025-04-20'] as const;
-
-// The interleaved-thinking beta activates Claude's extended thinking feature.
-// It is opt-in: pass `enableInterleavedThinking: true` to `authenticatedFetch`
-// options, or include a `thinking` block in your request body.
-// Reference: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
-export const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14' as const;
+export const REQUIRED_BETAS = ['oauth-2025-04-20', 'interleaved-thinking-2025-05-14'] as const;
 
 // ---------------------------------------------------------------------------
 // User-Agent
@@ -104,6 +106,23 @@ export const CCH_SALT = '59cf53e54c78' as const;
 export const CCH_POSITIONS = [4, 7, 20] as const;
 export const CLAUDE_CODE_VERSION = '2.1.87' as const;
 export const CLAUDE_CODE_ENTRYPOINT = 'sdk-cli' as const;
+
+// ---------------------------------------------------------------------------
+// EXPERIMENTAL_KEEP_SYSTEM_PROMPT — opt-out of system prompt relocation
+// ---------------------------------------------------------------------------
+
+/**
+ * When set to `1` or `true`, skip relocating sanitized system blocks to the
+ * first user message. The full sanitized system prompt stays in `system[]`.
+ *
+ * This may cause API rejections for OAuth-authenticated requests, since
+ * Anthropic's OAuth endpoint validates the system prompt and rejects
+ * third-party content in `system[]`. Only enable for debugging.
+ */
+export const experimentalKeepSystemPrompt = (): boolean => {
+  const raw = process.env['EXPERIMENTAL_KEEP_SYSTEM_PROMPT']?.trim();
+  return raw === '1' || raw === 'true';
+};
 
 // ---------------------------------------------------------------------------
 // ANTHROPIC_BASE_URL — proxy / alternative endpoint support

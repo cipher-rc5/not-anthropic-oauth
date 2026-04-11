@@ -9,23 +9,22 @@
 
 import { Duration, Effect, Option } from 'effect';
 import { buildBillingHeaderValue } from './cch.ts';
-import { InvalidCredentialsError, StorageError, TokenRefreshError } from './errors.ts';
+import { InvalidCredentialsError, NetworkError, StorageError, TokenRefreshError } from './errors.ts';
 import { loadCredentials, saveCredentials } from './store.ts';
 import { refreshAccessToken } from './token.ts';
 import type { Credentials, OAuthCredentials } from './types.ts';
-import { CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_IDENTITY, getBaseUrl, getUserAgent, INTERLEAVED_THINKING_BETA, OPENCODE_IDENTITY, PARAGRAPH_REMOVAL_ANCHORS, REQUIRED_BETAS, TEXT_REPLACEMENTS } from './types.ts';
+import { CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_IDENTITY, experimentalKeepSystemPrompt, getUserAgent, OPENCODE_IDENTITY, PARAGRAPH_REMOVAL_ANCHORS, REQUIRED_BETAS, TEXT_REPLACEMENTS } from './types.ts';
+import { createStrippedStream, mergeHeadersFromInit, rewriteOAuthUrl } from './utils.ts';
 
 const TOOL_PREFIX = 'mcp_';
-const MESSAGES_PATH = '/v1/messages';
 
 // ---------------------------------------------------------------------------
 // Beta header merging
 // ---------------------------------------------------------------------------
 
-const mergeBetaHeaders = (existing: string | null, enableInterleavedThinking: boolean): string => {
+const mergeBetaHeaders = (existing: string | null): string => {
   const incoming = existing ? existing.split(',').map(b => b.trim()).filter(Boolean) : [];
-  const base = enableInterleavedThinking ? [...REQUIRED_BETAS, INTERLEAVED_THINKING_BETA] : [...REQUIRED_BETAS];
-  return [...new Set([...base, ...incoming])].join(',');
+  return [...new Set([...REQUIRED_BETAS, ...incoming])].join(',');
 };
 
 // ---------------------------------------------------------------------------
@@ -35,21 +34,8 @@ const mergeBetaHeaders = (existing: string | null, enableInterleavedThinking: bo
 const buildHeaders = (
   source: HeadersInit | undefined,
   credentials: Credentials,
-  enableInterleavedThinking: boolean
 ): Headers => {
-  const headers = new Headers();
-
-  if (source instanceof Headers) {
-    source.forEach((v, k) => headers.set(k, v));
-  } else if (Array.isArray(source)) {
-    for (const [k, v] of source) {
-      if (typeof v !== 'undefined') headers.set(k, String(v));
-    }
-  } else if (source) {
-    for (const [k, v] of Object.entries(source)) {
-      if (typeof v !== 'undefined') headers.set(k, String(v));
-    }
-  }
+  const headers = mergeHeadersFromInit(source !== undefined ? { headers: source } : undefined);
 
   if (credentials.type === 'oauth') {
     headers.set('authorization', `Bearer ${credentials.access}`);
@@ -62,7 +48,7 @@ const buildHeaders = (
   if (!headers.has('anthropic-version')) {
     headers.set('anthropic-version', '2023-06-01');
   }
-  headers.set('anthropic-beta', mergeBetaHeaders(headers.get('anthropic-beta'), enableInterleavedThinking));
+  headers.set('anthropic-beta', mergeBetaHeaders(headers.get('anthropic-beta')));
   headers.set('user-agent', getUserAgent());
 
   return headers;
@@ -114,6 +100,9 @@ const isMessageBody = (v: unknown): v is MessageBody => isObject(v);
 // System prompt sanitization
 // ---------------------------------------------------------------------------
 
+// Global regex so all occurrences in a paragraph are replaced, not just the first.
+const OPENCODE_IDENTITY_GLOBAL_RE = new RegExp(OPENCODE_IDENTITY.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+
 /**
  * Remove OpenCode branding from a system prompt text block:
  * 1. Drops the exact OPENCODE_IDENTITY line (its paragraph or the whole block).
@@ -137,9 +126,11 @@ const sanitizeSystemText = (text: string): string => {
     return true;
   });
 
-  // Remove any inline occurrence that survived inside a larger paragraph
+  // Remove any inline occurrence(s) that survived inside a larger paragraph.
+  // Using a global regex ensures multiple occurrences in the same paragraph
+  // are all removed, not just the first.
   let result = filtered.join('\n\n');
-  result = result.replace(OPENCODE_IDENTITY, '').replace(/\n{3,}/g, '\n\n');
+  result = result.replace(OPENCODE_IDENTITY_GLOBAL_RE, '').replace(/\n{3,}/g, '\n\n');
 
   // Targeted inline replacements
   for (const rule of TEXT_REPLACEMENTS) {
@@ -206,33 +197,18 @@ const prependIdentityBlock = (system: unknown, billingHeader: string | null): Sy
 };
 
 // ---------------------------------------------------------------------------
-// Thinking detection
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true when the request body explicitly opts into extended thinking
- * via a `thinking: { type: "enabled" }` block.
- */
-const bodyRequestsThinking = (parsed: MessageBody): boolean => {
-  const thinking = parsed['thinking'];
-  return isObject(thinking) && thinking['type'] === 'enabled';
-};
-
-// ---------------------------------------------------------------------------
 // Request body transformation
 // ---------------------------------------------------------------------------
 
-const transformBody = (raw: string): { body: string, hasThinking: boolean } => {
+const transformBody = (raw: string): string => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { body: raw, hasThinking: false };
+    return raw;
   }
 
-  if (!isMessageBody(parsed)) return { body: raw, hasThinking: false };
-
-  const hasThinking = bodyRequestsThinking(parsed);
+  if (!isMessageBody(parsed)) return raw;
 
   // CCH billing header — requires at least one user turn in messages
   const rawMessages = parsed['messages'];
@@ -247,6 +223,42 @@ const transformBody = (raw: string): { body: string, hasThinking: boolean } => {
 
   // Sanitize system prompt and prepend the Claude Code identity block
   parsed['system'] = prependIdentityBlock(parsed['system'], billingHeader);
+
+  // Relocate non-identity system blocks to the first user message.
+  // Anthropic's OAuth endpoint validates system[] and rejects third-party
+  // content — only the identity block (system[0]) is allowed to remain.
+  // Everything else is prepended to the first user message as text.
+  // Skip this when EXPERIMENTAL_KEEP_SYSTEM_PROMPT=1 is set.
+  if (
+    !experimentalKeepSystemPrompt() &&
+    Array.isArray(parsed['system']) &&
+    (parsed['system'] as unknown[]).length > 1
+  ) {
+    const systemBlocks = parsed['system'] as SystemBlock[];
+    const kept = [systemBlocks[0]]; // identity block stays in system[]
+    const movedTexts: string[] = [];
+
+    for (let i = 1; i < systemBlocks.length; i++) {
+      const entry = systemBlocks[i];
+      const txt = typeof entry === 'string' ? entry : (entry?.text ?? '');
+      if (txt.length > 0) movedTexts.push(txt);
+    }
+
+    if (movedTexts.length > 0 && Array.isArray(parsed['messages'])) {
+      const messages = parsed['messages'] as Array<{ role?: string, content?: unknown } & Record<string, unknown>>;
+      const firstUser = messages.find(m => m.role === 'user');
+      if (firstUser) {
+        parsed['system'] = kept;
+        const prefix = movedTexts.join('\n\n');
+
+        if (typeof firstUser.content === 'string') {
+          firstUser.content = `${prefix}\n\n${firstUser.content}`;
+        } else if (Array.isArray(firstUser.content)) {
+          (firstUser.content as ContentBlock[]).unshift({ type: 'text', text: prefix } as TextBlock);
+        }
+      }
+    }
+  }
 
   // Prefix tool definitions with mcp_ (idempotent — skips if already prefixed)
   if (Array.isArray(parsed['tools'])) {
@@ -272,66 +284,7 @@ const transformBody = (raw: string): { body: string, hasThinking: boolean } => {
     });
   }
 
-  return { body: JSON.stringify(parsed), hasThinking };
-};
-
-// ---------------------------------------------------------------------------
-// Streaming response — strip mcp_ prefix from tool names
-// ---------------------------------------------------------------------------
-
-// The longest prefix of the pattern that could appear at the end of a chunk
-// and be completed by the next chunk.  We keep this many characters of
-// carry-over so the regex is never split across a chunk boundary.
-// Worst case: `"name":"mcp_` = 13 chars, plus surrounding whitespace variants.
-const STRIP_CARRY_LEN = 32;
-const STRIP_PATTERN = /"name"\s*:\s*"mcp_([^"]+)"/g;
-
-/**
- * Wrap a Response so that `mcp_` prefixes are stripped from tool name fields
- * as the body streams through. Safe to call on non-streaming responses too.
- *
- * A carry-over buffer of the last STRIP_CARRY_LEN chars is prepended to each
- * decoded chunk before matching, then trimmed from the output, ensuring the
- * pattern is never silently missed when a chunk boundary falls inside a field.
- */
-export const createStrippedStream = (response: Response): Response => {
-  if (!response.body) return response;
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let carry = '';
-
-  const stream = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        // Flush any remaining carry — strip and emit it.
-        if (carry.length > 0) {
-          controller.enqueue(encoder.encode(carry.replace(STRIP_PATTERN, '"name": "$1"')));
-        }
-        controller.close();
-        return;
-      }
-
-      // Prepend carry so the pattern can match across the previous boundary.
-      const raw = carry + decoder.decode(value, { stream: true });
-      const stripped = raw.replace(STRIP_PATTERN, '"name": "$1"');
-
-      // Keep the last STRIP_CARRY_LEN chars as carry for the next chunk,
-      // emit everything before that immediately.
-      if (stripped.length <= STRIP_CARRY_LEN) {
-        carry = stripped;
-        // Nothing safe to emit yet — wait for more data.
-      } else {
-        const safeEnd = stripped.length - STRIP_CARRY_LEN;
-        controller.enqueue(encoder.encode(stripped.slice(0, safeEnd)));
-        carry = stripped.slice(safeEnd);
-      }
-    }
-  });
-
-  return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
+  return JSON.stringify(parsed);
 };
 
 // ---------------------------------------------------------------------------
@@ -383,21 +336,12 @@ const ensureFreshToken = (
 // Public API
 // ---------------------------------------------------------------------------
 
-export interface AuthenticatedFetchOptions extends RequestInit {
-  /**
-   * Opt into Claude's extended thinking (interleaved-thinking) feature.
-   * When true, the `interleaved-thinking-2025-05-14` beta header is added.
-   * This is also auto-enabled when the request body contains a `thinking`
-   * block with `type: "enabled"`.
-   * Reference: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
-   */
-  enableInterleavedThinking?: boolean;
-}
+export type AuthenticatedFetchOptions = RequestInit;
 
 export const authenticatedFetch = (
   input: RequestInfo | URL,
   init?: AuthenticatedFetchOptions
-): Effect.Effect<Response, InvalidCredentialsError | TokenRefreshError | StorageError> =>
+): Effect.Effect<Response, InvalidCredentialsError | NetworkError | TokenRefreshError | StorageError> =>
   Effect.gen(function*() {
     const stored = yield* loadCredentials;
     const credentials = Option.getOrNull(stored);
@@ -414,58 +358,41 @@ export const authenticatedFetch = (
       finalCredentials = yield* ensureFreshToken(credentials);
     }
 
-    const requestInit = init ?? {};
-    const { enableInterleavedThinking: explicitThinking, ...fetchInit } = requestInit;
+    const fetchInit = init ?? {};
 
-    // Transform request body for OAuth compatibility; detect thinking opt-in
+    // Transform request body for OAuth compatibility
     let body = fetchInit.body;
-    let bodyRequestedThinking = false;
     if (credentials.type === 'oauth' && body && typeof body === 'string') {
-      const result = transformBody(body);
-      body = result.body;
-      bodyRequestedThinking = result.hasThinking;
+      body = transformBody(body);
     }
 
-    const useThinking = explicitThinking === true || bodyRequestedThinking;
-    const headers = buildHeaders(fetchInit.headers, finalCredentials, useThinking);
+    const headers = buildHeaders(fetchInit.headers, finalCredentials);
 
     // Rewrite URL: override origin when ANTHROPIC_BASE_URL is set, then
     // append ?beta=true for OAuth /v1/messages requests.
     let requestInput: RequestInfo | URL = input;
     if (finalCredentials.type === 'oauth') {
-      try {
-        const rawUrl = typeof input === 'string' || input instanceof URL ? input.toString() : (input as Request).url;
-        const url = new URL(rawUrl);
-
-        const baseUrl = getBaseUrl();
-        if (baseUrl) {
-          url.protocol = baseUrl.protocol;
-          url.host = baseUrl.host;
-        }
-
-        if (url.pathname === MESSAGES_PATH && !url.searchParams.has('beta')) {
-          url.searchParams.set('beta', 'true');
-        }
-
-        requestInput = input instanceof Request ? new Request(url.toString(), input) : url;
-      } catch {
-        // Non-parseable URL — pass through unchanged
+      const rawUrl = typeof input === 'string' || input instanceof URL ? input.toString() : (input as Request).url;
+      const rewritten = rewriteOAuthUrl(rawUrl);
+      if (rewritten !== null) {
+        requestInput = input instanceof Request ? new Request(rewritten.toString(), input) : rewritten;
       }
     }
 
-    const fetchArgs: [RequestInfo | URL, RequestInit] = [
-      requestInput,
-      { ...fetchInit, ...(body !== undefined ? { body } : {}), headers }
-    ];
+    const fetchArgs: [RequestInfo | URL, RequestInit] = [requestInput, {
+      ...fetchInit,
+      ...(body !== undefined ? { body } : {}),
+      headers
+    }];
 
     // Retry on 429 — respect Retry-After header when present, otherwise use
     // exponential backoff (1s, 2s, 4s). Three attempts total.
     const MAX_RATE_LIMIT_RETRIES = 3;
     let response: Response | null = null;
-    for (let attempt = 0; attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
+    for (let attempt = 0;attempt < MAX_RATE_LIMIT_RETRIES;attempt++) {
       response = yield* Effect.tryPromise({
         try: () => fetch(...fetchArgs),
-        catch: cause => new InvalidCredentialsError({ message: String(cause) })
+        catch: cause => new NetworkError({ message: String(cause), cause })
       });
 
       if (response.status !== 429) break;

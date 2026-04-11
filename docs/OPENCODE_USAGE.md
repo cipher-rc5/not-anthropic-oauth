@@ -21,6 +21,12 @@ $ bun run dev
 Anthropic OAuth CLI
 -------------------
 1) Login via Claude Pro/Max (OAuth)
+2) Login via Console (creates API key)
+3) Enter API key manually
+4) Show stored credentials
+5) Test authenticated request
+6) Logout
+0) Exit
 
 Choice: 1
 
@@ -83,8 +89,11 @@ console.log(config);
 import { writeOpenCodeConfig } from 'anthropic-oauth';
 import { Effect } from 'effect';
 
-// Writes to .opencode/config.json
+// Writes to .opencode/config.json (default path)
 await Effect.runPromise(writeOpenCodeConfig());
+
+// Or specify a custom path
+await Effect.runPromise(writeOpenCodeConfig('.opencode/config.json'));
 ```
 
 **Generated config.json:**
@@ -147,8 +156,7 @@ OAuth tokens from Claude Pro/Max expire after **4 hours** (14400 seconds).
 
 The `authenticatedFetch` client automatically refreshes tokens when:
 
-- Token is expired
-- Token expires within the current request
+- Token is expired at request time
 
 **Example:**
 
@@ -197,10 +205,10 @@ bun run dev
 
 ## Best Practices
 
-1. **Use OAuth for interactive apps** - Automatic refresh handles long-running sessions
-2. **Use API keys for scripts** - No expiration, no refresh needed
-3. **Check validity before long tasks** - Avoid mid-operation expiration
-4. **Store refresh tokens securely** - They provide long-term access
+1. **Use OAuth for interactive apps** — Automatic refresh handles long-running sessions
+2. **Use API keys for scripts** — No expiration, no refresh needed
+3. **Check validity before long tasks** — Avoid mid-operation expiration
+4. **Store refresh tokens securely** — They provide long-term access
 
 ## Troubleshooting
 
@@ -245,7 +253,7 @@ await Effect.runPromise(writeOpenCodeConfig('.opencode/config.json'));
 
 ## API Reference
 
-### `exportToEnvironment(): Effect<void, Error>`
+### `exportToEnvironment(): Effect<void, StorageError | Error>`
 
 Exports credentials to `process.env`:
 
@@ -253,13 +261,13 @@ Exports credentials to `process.env`:
 - `OPENCODE_PROVIDER`
 - `OPENCODE_MODEL`
 
-### `getOpenCodeConfig(model?: string): Effect<OpenCodeConfig, Error>`
+### `getOpenCodeConfig(model?: string): Effect<OpenCodeConfig, StorageError | Error>`
 
 Returns OpenCode configuration object.
 
 **Parameters:**
 
-- `model` - Override model (default: `ANTHROPIC_DEFAULT_MODEL` env var, or `'claude-sonnet-4-20250514'`)
+- `model` — Override model (default: `ANTHROPIC_DEFAULT_MODEL` env var, or `'claude-sonnet-4-20250514'`)
 
 **`OpenCodeConfig` type:**
 
@@ -271,22 +279,30 @@ interface OpenCodeConfig {
 }
 ```
 
-### `checkCredentialValidity(): Effect<{ valid: boolean; expiresIn?: number }, Error>`
+### `checkCredentialValidity(): Effect<{ valid: boolean; expiresIn?: number }, StorageError | Error>`
 
 Checks if stored credentials are valid.
 
 **Returns:**
 
-- `valid` - Whether credentials are valid
-- `expiresIn` - Seconds until expiration (OAuth only)
+- `valid` — Whether credentials are valid
+- `expiresIn` — Seconds until expiration (OAuth only)
 
-### `writeOpenCodeConfig(path?: string): Effect<void, Error>`
+### `writeOpenCodeConfig(path?: string): Effect<void, StorageError | Error>`
 
 Writes OpenCode config to JSON file.
 
 **Parameters:**
 
-- `path` - File path (default: `'.opencode/config.json'`)
+- `path` — File path (default: `'.opencode/config.json'`)
+
+### `generateOpenCodeConfigFile(): Effect<string, StorageError | Error>`
+
+Returns the config file content as a JSON string without writing to disk.
+
+### `getDefaultModel(): string`
+
+Returns the default model string. Respects `ANTHROPIC_DEFAULT_MODEL` env var.
 
 ---
 

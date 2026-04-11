@@ -5,7 +5,7 @@
 
 import { Effect } from 'effect';
 import { ApiKeyCreationError, TokenExchangeError, TokenRefreshError } from './errors.ts';
-import type { ApiKeyCredentials, OAuthCredentials, TokenResponse } from './types.ts';
+import type { ApiKeyCredentials, ApiKeyResponse, OAuthCredentials, TokenResponse } from './types.ts';
 import { ANTHROPIC_OAUTH_URL, getClientId, getUserAgent, OAUTH_REDIRECT_URI } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ const isTokenResponse = (v: unknown): v is TokenResponse =>
   typeof (v as Record<string, unknown>)['refresh_token'] === 'string' &&
   typeof (v as Record<string, unknown>)['expires_in'] === 'number';
 
-const isApiKeyResponse = (v: unknown): v is { raw_key: string } =>
+const isApiKeyResponse = (v: unknown): v is ApiKeyResponse =>
   typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>)['raw_key'] === 'string';
 
 // ---------------------------------------------------------------------------
@@ -81,9 +81,15 @@ const fetchWithRetry = async (
 // Helpers
 // ---------------------------------------------------------------------------
 
-const parseCode = (raw: string): { code: string, state: string } => {
+const parseCode = (raw: string): Effect.Effect<{ code: string, state: string }, TokenExchangeError> => {
   const [code, state = ''] = raw.split('#');
-  return { code: code ?? '', state };
+  const clean = code ?? '';
+  if (!clean) {
+    return Effect.fail(
+      new TokenExchangeError({ status: 0, body: 'Invalid authorization code: value must not be empty' })
+    );
+  }
+  return Effect.succeed({ code: clean, state });
 };
 
 const toOAuthCredentials = (json: TokenResponse): OAuthCredentials => ({
@@ -93,13 +99,35 @@ const toOAuthCredentials = (json: TokenResponse): OAuthCredentials => ({
   expires: Date.now() + json.expires_in * 1000
 });
 
+/**
+ * Read the error body text from a non-ok response and produce a typed Effect failure.
+ * Centralises the three-step (text → fail) pattern used in every token operation.
+ */
+const failWithBody = <E>(
+  response: Response,
+  mkError: (params: { status: number, body: string }) => E
+): Effect.Effect<never, E> =>
+  Effect.gen(function*() {
+    const body = yield* Effect.tryPromise({
+      try: () => response.text(),
+      catch: () => mkError({ status: response.status, body: '' })
+    });
+    return yield* Effect.fail(mkError({ status: response.status, body }));
+  });
+
+// Common headers for all token endpoint requests.
+const tokenHeaders = (): Record<string, string> => ({
+  'content-type': 'application/x-www-form-urlencoded',
+  'user-agent': getUserAgent()
+});
+
 // ---------------------------------------------------------------------------
 // Public operations
 // ---------------------------------------------------------------------------
 
 export const exchangeCode = (code: string, verifier: string): Effect.Effect<OAuthCredentials, TokenExchangeError> =>
   Effect.gen(function*() {
-    const { code: clean, state } = parseCode(code);
+    const { code: clean, state } = yield* parseCode(code);
 
     // Per RFC 6749 §4.1.3, OAuth token endpoints require application/x-www-form-urlencoded
     const params = new URLSearchParams({
@@ -113,20 +141,12 @@ export const exchangeCode = (code: string, verifier: string): Effect.Effect<OAut
 
     const response = yield* Effect.tryPromise({
       try: () =>
-        fetchWithRetry(ANTHROPIC_OAUTH_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': getUserAgent() },
-          body: params.toString()
-        }),
+        fetchWithRetry(ANTHROPIC_OAUTH_URL, { method: 'POST', headers: tokenHeaders(), body: params.toString() }),
       catch: cause => new TokenExchangeError({ status: 0, body: String(cause) })
     });
 
     if (!response.ok) {
-      const body = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: () => new TokenExchangeError({ status: response.status, body: '' })
-      });
-      return yield* Effect.fail(new TokenExchangeError({ status: response.status, body }));
+      return yield* failWithBody(response, p => new TokenExchangeError(p));
     }
 
     const raw = yield* Effect.tryPromise({
@@ -150,20 +170,12 @@ export const refreshAccessToken = (refresh_token: string): Effect.Effect<OAuthCr
 
     const response = yield* Effect.tryPromise({
       try: () =>
-        fetchWithRetry(ANTHROPIC_OAUTH_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': getUserAgent() },
-          body: params.toString()
-        }),
+        fetchWithRetry(ANTHROPIC_OAUTH_URL, { method: 'POST', headers: tokenHeaders(), body: params.toString() }),
       catch: cause => new TokenRefreshError({ status: 0, body: String(cause) })
     });
 
     if (!response.ok) {
-      const body = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: () => new TokenRefreshError({ status: response.status, body: '' })
-      });
-      return yield* Effect.fail(new TokenRefreshError({ status: response.status, body }));
+      return yield* failWithBody(response, p => new TokenRefreshError(p));
     }
 
     const raw = yield* Effect.tryPromise({
@@ -187,20 +199,16 @@ export const createApiKey = (access_token: string): Effect.Effect<ApiKeyCredenti
         fetchWithRetry('https://api.anthropic.com/api/oauth/claude_cli/create_api_key', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+            'content-type': 'application/json',
             'authorization': `Bearer ${access_token}`,
-            'User-Agent': getUserAgent()
+            'user-agent': getUserAgent()
           }
         }),
       catch: cause => new ApiKeyCreationError({ status: 0, body: String(cause) })
     });
 
     if (!response.ok) {
-      const body = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: () => new ApiKeyCreationError({ status: response.status, body: '' })
-      });
-      return yield* Effect.fail(new ApiKeyCreationError({ status: response.status, body }));
+      return yield* failWithBody(response, p => new ApiKeyCreationError(p));
     }
 
     const raw = yield* Effect.tryPromise({

@@ -66,7 +66,7 @@ const syncToOpenCode = Effect.gen(function*() {
   });
 
   yield* Effect.logInfo('Successfully synced OAuth credentials to OpenCode');
-  yield* Effect.logDebug(`Access token: ${credentials.access.substring(0, 8)}...`);
+  yield* Effect.logDebug('Access token: [REDACTED]');
   yield* Effect.logDebug(`Expires: ${new Date(credentials.expires).toISOString()}`);
 });
 

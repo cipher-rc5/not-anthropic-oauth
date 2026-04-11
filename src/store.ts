@@ -47,29 +47,50 @@ let credentialCache: Option.Option<Credentials> | null = null;
 // Store operations
 // ---------------------------------------------------------------------------
 
-export const loadCredentials: Effect.Effect<Option.Option<Credentials>, StorageError> = Effect.tryPromise({
-  try: async () => {
-    // Return cached value if available — avoids disk I/O on every API call
-    if (credentialCache !== null) return credentialCache;
+export const loadCredentials: Effect.Effect<Option.Option<Credentials>, StorageError> = Effect.gen(function*() {
+  // Return cached value if available — avoids disk I/O on every API call
+  if (credentialCache !== null) return credentialCache;
 
-    try {
-      const file = Bun.file(getCredentialsPath());
-      const raw = await file.text();
-      const parsed: unknown = JSON.parse(raw);
-      if (!isCredentials(parsed)) {
-        // Corrupt or unknown format — treat as missing rather than throwing
-        credentialCache = Option.none();
-        return credentialCache;
-      }
-      credentialCache = Option.some(parsed);
-      return credentialCache;
-    } catch {
-      credentialCache = Option.none();
-      return credentialCache;
-    }
-  },
-  catch: cause => new StorageError({ message: 'Failed to load credentials', cause })
-});
+  let raw: string;
+  try {
+    const file = Bun.file(getCredentialsPath());
+    raw = yield* Effect.tryPromise({ try: () => file.text(), catch: () => Option.none<Credentials>() });
+  } catch {
+    // File does not exist or is unreadable — treat as no credentials
+    credentialCache = Option.none();
+    return credentialCache;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    credentialCache = Option.none();
+    return credentialCache;
+  }
+
+  if (!isCredentials(parsed)) {
+    // File exists but has an unrecognised shape — warn so the user can
+    // diagnose why re-authentication is required.
+    yield* Effect.logWarning(
+      `Credential file at ${getCredentialsPath()} has an unrecognised format and will be ignored. ` +
+        'Please re-authenticate.'
+    );
+    credentialCache = Option.none();
+    return credentialCache;
+  }
+
+  // Warn when an OAuth token is already expired at load time.
+  // The token is still returned so the client layer can attempt a refresh.
+  if (parsed.type === 'oauth' && parsed.expires <= Date.now()) {
+    yield* Effect.logWarning(
+      'Stored OAuth token is expired. An automatic refresh will be attempted on the next request.'
+    );
+  }
+
+  credentialCache = Option.some(parsed);
+  return credentialCache;
+}).pipe(Effect.catchAll(cause => Effect.fail(new StorageError({ message: 'Failed to load credentials', cause }))));
 
 export const saveCredentials = (credentials: Credentials): Effect.Effect<void, StorageError> =>
   Effect.tryPromise({

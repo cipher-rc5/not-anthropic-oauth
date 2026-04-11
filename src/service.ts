@@ -3,8 +3,7 @@
 //              credential storage, and the three login methods.
 // reference: plugin source - auth.methods
 
-import { Effect } from 'effect';
-import { Option } from 'effect';
+import { Effect, Option } from 'effect';
 import type { ApiKeyCreationError, AuthorizationUrlError, PkceGenerationError, StorageError, TokenExchangeError } from './errors.ts';
 import { buildPkceFlow } from './pkce.ts';
 import { clearCredentials, loadCredentials, saveCredentials } from './store.ts';

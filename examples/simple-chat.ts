@@ -3,7 +3,7 @@
 // reference: src/client.ts, src/opencode.ts
 
 import { Effect } from 'effect';
-import { authenticatedFetch, checkCredentialValidity, exportToEnvironment } from '../src/index.ts';
+import { authenticatedFetch, exportToEnvironment, getDefaultModel } from '../src/index.ts';
 
 interface Message {
   readonly role: 'user' | 'assistant';
@@ -21,24 +21,16 @@ interface ChatResponse {
   readonly content: ReadonlyArray<{ readonly text: string }>;
 }
 
-const sendMessage = (message: string, model = 'claude-sonnet-4-20250514'): Effect.Effect<string, Error> =>
+// authenticatedFetch handles credential validation and auto-refresh internally.
+// No need to call checkCredentialValidity() — it will surface InvalidCredentialsError
+// if credentials are missing, or TokenRefreshError if a refresh fails.
+const sendMessage = (message: string, model = getDefaultModel()): Effect.Effect<string, Error> =>
   Effect.gen(function*() {
-    // Check credential validity before making request
-    const validity = yield* checkCredentialValidity();
-
-    if (!validity.valid) {
-      return yield* Effect.fail(new Error('Credentials expired or missing. Please login via CLI.'));
-    }
-
-    if (validity.expiresIn !== undefined && validity.expiresIn < 300) {
-      console.log(`[WARN]  Token expires in ${Math.floor(validity.expiresIn / 60)} minutes`);
-    }
-
     const request: ChatRequest = { model, max_tokens: 1024, messages: [{ role: 'user', content: message }] };
 
     const response = yield* authenticatedFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request)
     });
 

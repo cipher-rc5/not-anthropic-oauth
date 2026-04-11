@@ -14,16 +14,15 @@ This document describes the critical patches applied to fix OAuth authentication
 
 ### 1. User-Agent Spoofing (src/client.ts & src/token.ts)
 
-**Problem**: Anthropic's OAuth endpoints require the `claude-cli/2.1.2` user-agent to avoid rate limiting.
+**Problem**: Anthropic's OAuth endpoints require the `claude-cli/2.1.87 (external, cli)` user-agent to avoid rate limiting.
 
-**Solution**: Changed user-agent from Safari browser string to `claude-cli/2.1.2`.
+**Solution**: Set user-agent to `claude-cli/2.1.87 (external, cli)` (defined in `src/types.ts`).
 
 ```typescript
-// Before
-const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...';
+// src/types.ts
+const DEFAULT_USER_AGENT = 'claude-cli/2.1.87 (external, cli)' as const;
 
-// After
-const DEFAULT_USER_AGENT = 'claude-cli/2.1.2';
+export const getUserAgent = (): string => process.env['ANTHROPIC_USER_AGENT'] ?? DEFAULT_USER_AGENT;
 ```
 
 **Environment Variable**: Can be overridden with `ANTHROPIC_USER_AGENT` env var.
@@ -35,33 +34,37 @@ const DEFAULT_USER_AGENT = 'claude-cli/2.1.2';
 **Solution**: Changed all OAuth token operations to use URLSearchParams:
 
 ```typescript
-// Before
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ grant_type: 'authorization_code', ... })
-
 // After
 headers: { 
-  'Content-Type': 'application/x-www-form-urlencoded',
-  'User-Agent': OAUTH_USER_AGENT 
+  'content-type': 'application/x-www-form-urlencoded',
+  'user-agent': getUserAgent()
 },
 body: new URLSearchParams({ grant_type: 'authorization_code', ... }).toString()
 ```
 
 ### 3. Beta Headers (Already Implemented)
 
-The following beta headers are already correctly implemented:
+The following beta headers are always injected for OAuth compatibility (`src/types.ts`):
 
-- `oauth-2025-04-20` - Enables OAuth authentication
-- `interleaved-thinking-2025-05-14` - Enables extended reasoning capabilities
+```typescript
+export const REQUIRED_BETAS = ['oauth-2025-04-20', 'interleaved-thinking-2025-05-14'] as const;
+```
 
-### 4. Request Transformations (Already Implemented)
+- `oauth-2025-04-20` — Enables OAuth authentication
+- `interleaved-thinking-2025-05-14` — Enables extended reasoning capabilities
 
-The following transformations are already correctly implemented in `src/client.ts`:
+### 4. Request Transformations (src/client.ts — `transformBody`)
 
-- **Bearer Token Authentication**: Sets `Authorization: Bearer <token>` for OAuth credentials
-- **Beta Query Parameter**: Appends `?beta=true` to `/v1/messages` endpoint for OAuth requests
-- **Tool Name Prefixing**: Adds `mcp_` prefix to tool names in outbound requests
-- **System Prompt Sanitization**: Replaces "OpenCode" with "Claude Code" in system prompts
+The following transformations are applied to OAuth requests in `src/client.ts`:
+
+- **CCH Billing Header**: Computes and injects `x-anthropic-billing-header` into the system prompt (via `src/cch.ts`)
+- **Claude Code Identity Block**: Prepends the identity block as the first system entry
+- **System Prompt Sanitization**: Removes OpenCode branding from system prompts (drops `OPENCODE_IDENTITY`, filters URL-anchor paragraphs, applies inline text replacements)
+- **System Block Relocation**: Moves non-identity system blocks to the first user message; only the identity block stays in `system[]` (required by Anthropic's OAuth endpoint validation). Opt out with `EXPERIMENTAL_KEEP_SYSTEM_PROMPT=1`
+- **Bearer Token Authentication**: Sets `authorization: Bearer <token>` for OAuth credentials
+- **Beta Query Parameter**: Appends `?beta=true` to `/v1/messages` endpoint for OAuth requests (via `rewriteOAuthUrl` in `src/utils.ts`)
+- **Tool Name Prefixing**: Adds `mcp_` prefix to tool definitions and `tool_use` content blocks in outbound requests (idempotent)
+- **Streaming mcp_ Strip**: Strips `mcp_` prefixes from tool names in streaming responses (via `createStrippedStream` in `src/utils.ts`)
 
 ## Testing
 
@@ -81,45 +84,62 @@ bun run lint       # Full lint check passes
 
 ## Implementation Notes
 
-1. **Token Exchange** (`exchangeCode`):
-   - Now uses `application/x-www-form-urlencoded`
-   - Includes `claude-cli/2.1.2` user-agent
+1. **Token Exchange** (`exchangeCode` in `src/token.ts`):
+   - Uses `application/x-www-form-urlencoded`
+   - Includes `claude-cli/2.1.87 (external, cli)` user-agent
    - Handles optional state parameter correctly
+   - Token endpoint: `https://platform.claude.com/v1/oauth/token`
+   - Redirect URI: `https://platform.claude.com/oauth/code/callback`
 
-2. **Token Refresh** (`refreshAccessToken`):
-   - Now uses `application/x-www-form-urlencoded`
-   - Includes `claude-cli/2.1.2` user-agent
+2. **Token Refresh** (`refreshAccessToken` in `src/token.ts`):
+   - Uses `application/x-www-form-urlencoded`
+   - Includes `claude-cli/2.1.87 (external, cli)` user-agent
    - Prevents 429 rate limiting on refresh
 
-3. **API Requests** (`authenticatedFetch`):
-   - Uses `claude-cli/2.1.2` user-agent for all requests
-   - Maintains existing request body transformations
-   - Properly handles OAuth vs API key authentication
+3. **API Key Creation** (`createApiKey` in `src/token.ts`):
+   - Endpoint: `https://api.anthropic.com/api/oauth/claude_cli/create_api_key`
+   - Uses `Authorization: Bearer <access_token>`
+
+4. **API Requests** (`authenticatedFetch` in `src/client.ts`):
+   - Uses `claude-cli/2.1.87 (external, cli)` user-agent for all requests
+   - Applies full body transformation pipeline for OAuth requests
+   - Rewrites URL origin when `ANTHROPIC_BASE_URL` is set (proxy support)
 
 ## Environment Variables
 
-Two separate env vars control user-agent behaviour in different modules:
+Multiple env vars control behaviour:
 
-- `ANTHROPIC_USER_AGENT`: Override the `claude-cli/2.1.2` user-agent used by `src/client.ts` (`authenticatedFetch`) and `src/token.ts`. Not recommended.
-- `OPENCODE_ANTHROPIC_USER_AGENT`: Override the Safari user-agent used by `src/plugin.ts` (`AnthropicUserAgentPlugin`) when patching global fetch for OpenCode.
+| Variable                          | Module      | Purpose                                                                 |
+| --------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `ANTHROPIC_USER_AGENT`            | types.ts    | Override `claude-cli/2.1.87 (external, cli)` for `authenticatedFetch` and `token.ts` |
+| `OPENCODE_ANTHROPIC_USER_AGENT`   | plugin.ts   | Override the Safari UA used by the legacy `AnthropicUserAgentPlugin`    |
+| `ANTHROPIC_BASE_URL`              | types.ts    | Redirect all API requests to a proxy/alternative endpoint (http/https)  |
+| `ANTHROPIC_CLIENT_ID`             | types.ts    | Override the default OAuth client ID                                    |
+| `ANTHROPIC_DEFAULT_MODEL`         | opencode.ts | Override the default model used in `getOpenCodeConfig`                  |
+| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to the first user message |
 
 ## Migration Notes
 
 If you're using this library and experiencing OAuth authentication issues:
 
 1. **Update to the latest version** with these patches
-2. **No code changes required** - patches are transparent
+2. **No code changes required** — patches are transparent
 
 ## Implemented Features
 
 The following items have been fully implemented:
 
 1. **Retry Logic with Exponential Backoff** (`src/token.ts` — `fetchWithRetry`)
-   - Up to 3 attempts with 250ms/500ms/1000ms delays
+   - Up to 3 attempts with delays of 0ms / 250ms / 500ms before attempts 1 / 2 / 3
    - Retries on 5xx and network errors; 4xx errors pass through immediately
+   - Per-attempt 10s timeout (configurable via `RetryOptions`)
 
-2. **Token Refresh Deduplication** (`src/client.ts` — `ensureFreshToken`)
-   - Module-level `refreshInFlight` mutex prevents concurrent refresh races
+2. **429 Rate-Limit Retry** (`src/client.ts` — `authenticatedFetch`)
+   - Separate 3-attempt retry loop for `429 Too Many Requests` responses
+   - Respects `Retry-After` header when present; otherwise uses 1s / 2s backoff
+
+3. **Token Refresh Deduplication** (`src/client.ts` — `ensureFreshToken`)
+   - Module-level `refreshInFlight: Promise<OAuthCredentials> | null` mutex prevents concurrent refresh races
    - Multiple simultaneous requests with an expired token trigger exactly one refresh
 
 ## Future Considerations

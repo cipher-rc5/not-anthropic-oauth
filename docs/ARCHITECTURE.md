@@ -35,6 +35,12 @@ graph TB
         Token[Token Operations<br/>src/token.ts]
         Store[Credential Store<br/>src/store.ts]
         PKCE[PKCE Generator<br/>src/pkce.ts]
+        Plugin[OpenCode Plugin<br/>src/plugin.ts]
+    end
+
+    subgraph "Utilities"
+        CCH[CCH Billing Header<br/>src/cch.ts]
+        Utils[Shared Utilities<br/>src/utils.ts]
     end
 
     subgraph "Domain"
@@ -43,7 +49,7 @@ graph TB
     end
 
     subgraph "External Systems"
-        Anthropic[Anthropic OAuth API<br/>console.anthropic.com]
+        Anthropic[Anthropic OAuth API<br/>platform.claude.com]
         OpenCode[OpenCode<br/>~/.local/share/opencode]
         FileSystem[File System<br/>~/.config/anthropic-oauth]
     end
@@ -55,6 +61,9 @@ graph TB
     Service --> Store
     Client --> Token
     Client --> Store
+    Client --> CCH
+    Client --> Utils
+    Plugin --> Utils
     Token --> Anthropic
     Store --> FileSystem
     Sync --> OpenCode
@@ -64,6 +73,8 @@ graph TB
     Token --> Errors
     Store --> Types
     Store --> Errors
+    CCH --> Types
+    Utils --> Types
 
     style CLI fill:#e1f5ff
     style Sync fill:#e1f5ff
@@ -72,6 +83,9 @@ graph TB
     style Token fill:#f0f0f0
     style Store fill:#f0f0f0
     style PKCE fill:#f0f0f0
+    style Plugin fill:#f0f0f0
+    style CCH fill:#f5f0ff
+    style Utils fill:#f5f0ff
     style Types fill:#e8f5e9
     style Errors fill:#e8f5e9
     style Anthropic fill:#ffebee
@@ -81,17 +95,20 @@ graph TB
 
 ### Module Responsibilities
 
-| Module                | Responsibility               | Dependencies                |
-| --------------------- | ---------------------------- | --------------------------- |
-| `cli.ts`              | Interactive user interface   | service, Effect             |
-| `sync-to-opencode.ts` | Sync credentials to OpenCode | store, Effect               |
-| `service.ts`          | High-level API facade        | client, token, store        |
-| `client.ts`           | Authenticated HTTP requests  | token, store, types, errors |
-| `token.ts`            | OAuth token operations       | types, errors               |
-| `store.ts`            | Credential persistence       | types, errors, Bun.file     |
-| `pkce.ts`             | PKCE challenge generation    | @openauthjs/openauth        |
-| `types.ts`            | Domain types & constants     | -                           |
-| `errors.ts`           | Tagged error definitions     | Effect.Data                 |
+| Module                | Responsibility                          | Dependencies                      |
+| --------------------- | --------------------------------------- | --------------------------------- |
+| `cli.ts`              | Interactive user interface              | service, Effect                   |
+| `sync-to-opencode.ts` | Sync credentials to OpenCode            | store, Effect                     |
+| `service.ts`          | High-level API facade                   | client, token, store              |
+| `client.ts`           | Authenticated HTTP requests             | token, store, cch, utils, types, errors |
+| `token.ts`            | OAuth token operations                  | types, errors                     |
+| `store.ts`            | Credential persistence                  | types, errors, Bun.file           |
+| `pkce.ts`             | PKCE challenge generation               | @openauthjs/openauth              |
+| `plugin.ts`           | OpenCode server plugin & fetch patcher  | utils, types                      |
+| `cch.ts`              | Content Consistency Hashing (billing header) | types                        |
+| `utils.ts`            | Header merging, URL rewriting, stream stripping | types                     |
+| `types.ts`            | Domain types & constants                | -                                 |
+| `errors.ts`           | Tagged error definitions                | Effect.Data                       |
 
 ---
 
@@ -107,7 +124,7 @@ sequenceDiagram
     participant Token
     participant PKCE
     participant Browser
-    participant Anthropic as Anthropic OAuth<br/>console.anthropic.com
+    participant Anthropic as Anthropic OAuth<br/>platform.claude.com
 
     User->>CLI: Choose OAuth login (option 1 or 2)
     CLI->>Service: beginOAuth(mode)
@@ -133,7 +150,7 @@ sequenceDiagram
     alt OAuth Token (mode: max)
         CLI->>Service: completeOAuthLogin(code, verifier)
         Service->>Token: exchangeCode(code, verifier)
-        Token->>Anthropic: POST /v1/oauth/token<br/>Content-Type: application/x-www-form-urlencoded<br/>User-Agent: claude-cli/2.1.2
+        Token->>Anthropic: POST /v1/oauth/token<br/>Content-Type: application/x-www-form-urlencoded<br/>User-Agent: claude-cli/2.1.87 (external, cli)
         Anthropic-->>Token: {access_token, refresh_token, expires_in}
         Token-->>Service: OAuthCredentials
     else API Key (mode: console)
@@ -142,7 +159,7 @@ sequenceDiagram
         Token->>Anthropic: POST /v1/oauth/token
         Anthropic-->>Token: {access_token, refresh_token}
         Token->>Token: createApiKey(access_token)
-        Token->>Anthropic: POST /api/oauth/claude_cli/create_api_key
+        Token->>Anthropic: POST /api/oauth/claude_cli/create_api_key<br/>(api.anthropic.com)
         Anthropic-->>Token: {raw_key}
         Token-->>Service: ApiKeyCredentials
     end
@@ -157,14 +174,16 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    Base[https://claude.ai/oauth/authorize] --> ClientID[?client_id=9d1c250a...]
+    BaseMax["max mode: https://claude.ai/oauth/authorize"] --> ClientID[?client_id=9d1c250a...]
+    BaseConsole["console mode: https://platform.claude.com/oauth/authorize"] --> ClientID
     ClientID --> ResponseType[&response_type=code]
     ResponseType --> Challenge[&code_challenge=...]
     Challenge --> Method[&code_challenge_method=S256]
-    Method --> Redirect[&redirect_uri=https://console.anthropic.com/oauth/code/callback]
+    Method --> Redirect["&redirect_uri=https://platform.claude.com/oauth/code/callback"]
     Redirect --> Scope[&scope=user:profile...]
     
-    style Base fill:#e3f2fd
+    style BaseMax fill:#e3f2fd
+    style BaseConsole fill:#e3f2fd
     style Scope fill:#e3f2fd
 ```
 
@@ -225,7 +244,7 @@ sequenceDiagram
     participant Anthropic
 
     App->>Client: authenticatedFetch(url, init)
-    Client->>Store: loadCredentials()
+    Client->>Store: loadCredentials (Effect value)
     Store-->>Client: OAuthCredentials
     
     Client->>Client: Check expiry<br/>expires > Date.now()?
@@ -234,16 +253,17 @@ sequenceDiagram
         Client->>Client: Use existing token
     else Token expired or expiring
         Client->>Token: refreshAccessToken(refresh_token)
-        Token->>Anthropic: POST /v1/oauth/token<br/>grant_type=refresh_token<br/>User-Agent: claude-cli/2.1.2
+        Token->>Anthropic: POST /v1/oauth/token<br/>grant_type=refresh_token<br/>User-Agent: claude-cli/2.1.87 (external, cli)
         Anthropic-->>Token: {access_token, refresh_token, expires_in}
         Token-->>Client: New OAuthCredentials
         Client->>Store: saveCredentials(new credentials)
         Store-->>Client: Success
     end
     
-    Client->>Client: buildHeaders(credentials)
-    Client->>Anthropic: fetch(url) with Bearer token
+    Client->>Client: buildHeaders(credentials)<br/>+ transformBody() (OAuth only)<br/>+ rewriteOAuthUrl()
+    Client->>Anthropic: fetch(url) with Bearer token<br/>(retry on 429, up to 3 attempts)
     Anthropic-->>Client: Response
+    Client->>Client: createStrippedStream()<br/>(strip mcp_ from tool names, OAuth only)
     Client-->>App: Response
 ```
 
@@ -258,31 +278,37 @@ flowchart TD
     Start([authenticatedFetch called]) --> LoadCreds[Load credentials<br/>from store]
     
     LoadCreds --> CheckCreds{Credentials<br/>exist?}
-    CheckCreds -->|No| Error1[Throw InvalidCredentialsError]
+    CheckCreds -->|No| Error1[Fail: InvalidCredentialsError]
     CheckCreds -->|Yes| CheckType{Credential<br/>type?}
     
     CheckType -->|OAuth| CheckExpiry{Token<br/>expired?}
     CheckType -->|API Key| BuildHeaders
     
-    CheckExpiry -->|Yes| Refresh[Refresh token]
-    CheckExpiry -->|No| BuildHeaders[Build request headers]
+    CheckExpiry -->|Yes| Refresh[Refresh token<br/>ensureFreshToken]
+    CheckExpiry -->|No| BuildHeaders[Build request headers<br/>Authorization + betas + user-agent]
     
     Refresh --> RefreshSuccess{Success?}
     RefreshSuccess -->|Yes| SaveNew[Save new credentials]
-    RefreshSuccess -->|No| Error2[Throw TokenRefreshError]
+    RefreshSuccess -->|No| Error2[Fail: TokenRefreshError]
     
     SaveNew --> BuildHeaders
     
-    BuildHeaders --> TransformBody{OAuth +<br/>JSON body?}
-    TransformBody -->|Yes| Transform[Transform request body:<br/>1. Prefix tools with mcp_<br/>2. Sanitize system prompt<br/>3. Add tool_use prefixes]
-    TransformBody -->|No| TransformURL
+    BuildHeaders --> TransformBody{OAuth +<br/>string body?}
+    TransformBody -->|Yes| Transform["Transform request body (transformBody):<br/>1. Compute CCH billing header<br/>2. Prepend Claude Code identity block<br/>3. Sanitize system prompt (remove OpenCode branding)<br/>4. Relocate extra system blocks to first user msg<br/>5. Prefix tool definitions with mcp_<br/>6. Prefix tool_use content blocks with mcp_"]
+    TransformBody -->|No| RewriteURL
     
-    Transform --> TransformURL{OAuth +<br/>/v1/messages?}
-    TransformURL -->|Yes| AddBeta[Add ?beta=true query param]
-    TransformURL -->|No| Fetch
+    Transform --> RewriteURL{OAuth?}
+    RewriteURL -->|Yes| RewriteOAuth["rewriteOAuthUrl:<br/>- Override origin via ANTHROPIC_BASE_URL<br/>- Append ?beta=true to /v1/messages"]
+    RewriteURL -->|No| Fetch
     
-    AddBeta --> Fetch[Execute fetch]
-    Fetch --> Return([Return Response])
+    RewriteOAuth --> Fetch["Execute fetch<br/>(429 retry loop: 3 attempts,<br/>Retry-After or 1s/2s backoff)"]
+    Fetch --> CheckStatus{Response<br/>status 429?}
+    CheckStatus -->|Yes, retry| Fetch
+    CheckStatus -->|No or exhausted| StripStream{OAuth?}
+    
+    StripStream -->|Yes| Strip["createStrippedStream:<br/>strip mcp_ prefixes from<br/>tool names in response"]
+    StripStream -->|No| Return
+    Strip --> Return([Return Response])
     
     Error1 --> ErrorEnd([Effect.fail])
     Error2 --> ErrorEnd
@@ -293,8 +319,9 @@ flowchart TD
     style LoadCreds fill:#f0f0f0
     style BuildHeaders fill:#f0f0f0
     style Transform fill:#fff4e1
-    style AddBeta fill:#fff4e1
+    style RewriteOAuth fill:#fff4e1
     style Fetch fill:#f0f0f0
+    style Strip fill:#f5f0ff
 ```
 
 ### Request Header Construction
@@ -305,11 +332,11 @@ graph TB
     
     CopyHeaders --> CheckType{Credential type?}
     
-    CheckType -->|OAuth| SetBearer[Set Authorization:<br/>Bearer token]
+    CheckType -->|OAuth| SetBearer["Set authorization:<br/>Bearer token (lowercase key)"]
     CheckType -->|API Key| SetApiKey[Set x-api-key:<br/>API key]
     
     SetBearer --> DeleteApiKey[Delete x-api-key]
-    SetApiKey --> DeleteBearer[Delete Authorization]
+    SetApiKey --> DeleteBearer[Delete authorization]
     
     DeleteApiKey --> CheckVersion{Has anthropic-version?}
     DeleteBearer --> CheckVersion
@@ -317,9 +344,9 @@ graph TB
     CheckVersion -->|No| SetVersion[Set anthropic-version:<br/>2023-06-01]
     CheckVersion -->|Yes| MergeBetas
     
-    SetVersion --> MergeBetas[Merge anthropic-beta:<br/>oauth-2025-04-20,<br/>interleaved-thinking-2025-05-14]
+    SetVersion --> MergeBetas["Merge anthropic-beta:<br/>oauth-2025-04-20,<br/>interleaved-thinking-2025-05-14"]
     
-    MergeBetas --> SetUserAgent[Set User-Agent:<br/>claude-cli/2.1.2]
+    MergeBetas --> SetUserAgent["Set user-agent:<br/>claude-cli/2.1.87 (external, cli)<br/>(or ANTHROPIC_USER_AGENT override)"]
     
     SetUserAgent --> Done[Return Headers]
     
@@ -373,12 +400,31 @@ classDiagram
         +_tag: "InvalidCredentialsError"
         +message: string
     }
+
+    class PkceGenerationError {
+        +_tag: "PkceGenerationError"
+        +cause: unknown
+    }
+
+    class AuthorizationUrlError {
+        +_tag: "AuthorizationUrlError"
+        +message: string
+    }
+
+    class NetworkError {
+        +_tag: "NetworkError"
+        +message: string
+        +cause: unknown
+    }
     
     Data~TaggedError~ <|-- StorageError
     Data~TaggedError~ <|-- TokenExchangeError
     Data~TaggedError~ <|-- TokenRefreshError
     Data~TaggedError~ <|-- ApiKeyCreationError
     Data~TaggedError~ <|-- InvalidCredentialsError
+    Data~TaggedError~ <|-- PkceGenerationError
+    Data~TaggedError~ <|-- AuthorizationUrlError
+    Data~TaggedError~ <|-- NetworkError
 ```
 
 ### Error Handling Flow
@@ -397,12 +443,18 @@ flowchart TD
     CheckError -->|TokenRefreshError| HandleRefresh[Log refresh failure<br/>Suggest re-login]
     CheckError -->|ApiKeyCreationError| HandleApiKey[Log API key creation error<br/>Check account permissions]
     CheckError -->|InvalidCredentialsError| HandleInvalid[Log missing credentials<br/>Suggest login flow]
+    CheckError -->|NetworkError| HandleNetwork[Log network failure<br/>Check connectivity]
+    CheckError -->|PkceGenerationError| HandlePkce[Log PKCE error]
+    CheckError -->|AuthorizationUrlError| HandleUrl[Log URL construction error]
     
     HandleStorage --> Propagate[Effect.fail with tagged error]
     HandleExchange --> Propagate
     HandleRefresh --> Propagate
     HandleApiKey --> Propagate
     HandleInvalid --> Propagate
+    HandleNetwork --> Propagate
+    HandlePkce --> Propagate
+    HandleUrl --> Propagate
     
     Propagate --> Caller[Caller handles or propagates]
     
@@ -427,7 +479,7 @@ sequenceDiagram
     participant OpenCode
 
     User->>Sync: bun run sync
-    Sync->>Store: loadCredentials()
+    Sync->>Store: loadCredentials (Effect value)
     Store->>FS: Read ~/.config/anthropic-oauth/credentials.json
     FS-->>Store: JSON content
     Store-->>Sync: OAuthCredentials
@@ -483,7 +535,7 @@ graph TB
 ```mermaid
 graph LR
     subgraph "Runtime"
-        Bun[Bun 1.3.11]
+        Bun["Bun >=1.3.12"]
     end
     
     subgraph "Language"
@@ -499,7 +551,7 @@ graph LR
     end
     
     subgraph "External APIs"
-        Anthropic[Anthropic OAuth API<br/>console.anthropic.com]
+        Anthropic["Anthropic OAuth API<br/>platform.claude.com (OAuth/token)<br/>api.anthropic.com (API key creation)"]
     end
     
     TS --> Bun
@@ -548,15 +600,15 @@ Each module has one clear purpose, making the codebase easy to navigate and main
 
 ### Credential Caching
 
-- Credentials loaded once per request chain
-- In-memory storage during request processing
-- File I/O only on login/logout
+- Credentials loaded once and cached in-memory (`credentialCache` in `store.ts`)
+- Cache invalidated on write or clear
+- File I/O only on first load, login, and logout
 
 ### Token Refresh Strategy
 
-- Proactive refresh before expiry (not reactive)
-- Prevents request failures due to expired tokens
-- Single refresh per expiry window (no redundant calls)
+- Reactive refresh: triggered when token is expired at request time
+- Single refresh per expiry window via `refreshInFlight` Promise mutex
+- Prevents concurrent requests from each triggering a separate refresh
 
 ### Effect Optimization
 
@@ -572,6 +624,7 @@ Each module has one clear purpose, making the codebase easy to navigate and main
 
 - OAuth tokens: `~/.config/anthropic-oauth/credentials.json`
 - File permissions: `0600` (owner read/write only)
+- Atomic write via temp file + rename (eliminates TOCTOU window)
 - Never logged or exposed in error messages
 
 ### Token Exposure Prevention
@@ -585,6 +638,19 @@ Each module has one clear purpose, making the codebase easy to navigate and main
 - HTTPS-only communication
 - PKCE flow for OAuth (prevents interception attacks)
 - User-agent validation (prevents impersonation)
+
+---
+
+## Environment Variables
+
+| Variable                        | Module        | Purpose                                                      |
+| ------------------------------- | ------------- | ------------------------------------------------------------ |
+| `ANTHROPIC_USER_AGENT`          | types.ts      | Override the default `claude-cli/2.1.87 (external, cli)` UA |
+| `ANTHROPIC_CLIENT_ID`           | types.ts      | Override the default OAuth client ID                         |
+| `ANTHROPIC_BASE_URL`            | types.ts      | Redirect all API requests to a proxy/alternative endpoint    |
+| `ANTHROPIC_DEFAULT_MODEL`       | opencode.ts   | Override the default model (`claude-sonnet-4-20250514`)      |
+| `OPENCODE_ANTHROPIC_USER_AGENT` | plugin.ts     | Override the Safari UA used by `AnthropicUserAgentPlugin`    |
+| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to user msg  |
 
 ---
 

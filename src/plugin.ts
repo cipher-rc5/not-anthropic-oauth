@@ -13,14 +13,8 @@
 // note: opencode v1.2.27 calls the default export directly as plugin(input) — the export
 //       must be the server function itself, not an object with a server property.
 
-import { createStrippedStream } from './client.ts';
-import { getBaseUrl, getUserAgent } from './types.ts';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MESSAGES_PATH = '/v1/messages';
+import { getUserAgent } from './types.ts';
+import { createStrippedStream, mergeHeadersFromInit, rewriteOAuthUrl } from './utils.ts';
 
 // ---------------------------------------------------------------------------
 // Legacy fetch-patch (backwards compat — used by AnthropicUserAgentPlugin)
@@ -51,32 +45,6 @@ function resolveUrl(input: RequestInfo | URL): URL | null {
   return null;
 }
 
-function buildHeadersFromInit(input: RequestInfo | URL, init?: RequestInit): Headers {
-  const headers = new Headers();
-
-  if (input instanceof Request) {
-    input.headers.forEach((value, key) => {
-      headers.set(key, value);
-    });
-  }
-
-  if (init?.headers instanceof Headers) {
-    init.headers.forEach((value, key) => {
-      headers.set(key, value);
-    });
-  } else if (Array.isArray(init?.headers)) {
-    for (const [key, value] of init.headers) {
-      if (typeof value !== 'undefined') headers.set(key, String(value));
-    }
-  } else if (init?.headers) {
-    for (const [key, value] of Object.entries(init.headers)) {
-      if (typeof value !== 'undefined') headers.set(key, String(value));
-    }
-  }
-
-  return headers;
-}
-
 function isPatched(g: typeof globalThis): boolean {
   return (g as Record<symbol, unknown>)[PATCH_SENTINEL] === true;
 }
@@ -99,7 +67,7 @@ function patchFetch(): void {
       return originalFetch(input, init);
     }
 
-    const headers = buildHeadersFromInit(input, init);
+    const headers = mergeHeadersFromInit(init, input instanceof Request ? input : undefined);
     headers.set('user-agent', getWebUserAgent());
 
     return originalFetch(input, { ...(init ?? {}), headers });
@@ -135,41 +103,18 @@ function makeOAuthFetch(accessToken: string) {
       urlStr = (input as Request).url;
     }
 
-    let url: URL;
-    try {
-      url = new URL(urlStr);
-    } catch {
+    const rewritten = rewriteOAuthUrl(urlStr);
+    if (rewritten === null) {
       return fetch(input, init);
     }
 
-    // Override origin when ANTHROPIC_BASE_URL is set (proxy / test double support)
-    const baseUrl = getBaseUrl();
-    if (baseUrl) {
-      url.protocol = baseUrl.protocol;
-      url.host = baseUrl.host;
-    }
-
-    // Append ?beta=true to /v1/messages for OAuth Pro/Max quota routing
-    if (url.pathname === MESSAGES_PATH && !url.searchParams.has('beta')) {
-      url.searchParams.set('beta', 'true');
-    }
-
     // Merge caller headers, then swap x-api-key → Authorization: Bearer
-    const headers = new Headers();
-    const sourceHeaders = init?.headers;
-    if (sourceHeaders instanceof Headers) {
-      sourceHeaders.forEach((v, k) => headers.set(k, v));
-    } else if (Array.isArray(sourceHeaders)) {
-      for (const [k, v] of sourceHeaders) headers.set(k, v);
-    } else if (sourceHeaders) {
-      for (const [k, v] of Object.entries(sourceHeaders)) headers.set(k, v);
-    }
-
+    const headers = mergeHeadersFromInit(init, input instanceof Request ? input : undefined);
     headers.delete('x-api-key');
     headers.set('authorization', `Bearer ${accessToken}`);
     headers.set('user-agent', getUserAgent());
 
-    const updatedInput = input instanceof Request ? new Request(url.toString(), input) : url.toString();
+    const updatedInput = input instanceof Request ? new Request(rewritten.toString(), input) : rewritten.toString();
     const response = await fetch(updatedInput, { ...(init ?? {}), headers });
 
     // Strip mcp_ prefixes from tool names in streaming responses

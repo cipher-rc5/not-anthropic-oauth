@@ -3,7 +3,7 @@
 // reference: src/client.ts, src/token.ts
 
 import { Effect } from 'effect';
-import { authenticatedFetch, checkCredentialValidity } from '../src/index.ts';
+import { authenticatedFetch, getDefaultModel } from '../src/index.ts';
 
 interface Message {
   readonly role: 'user' | 'assistant';
@@ -35,36 +35,33 @@ class ConversationManager {
   }
 }
 
+// authenticatedFetch handles credential validation and auto-refresh internally.
 const sendChatMessage = (conversation: ConversationManager, userMessage: string): Effect.Effect<string, Error> =>
   Effect.gen(function*() {
     // Add user message to conversation
     conversation.addUserMessage(userMessage);
 
-    // Check token validity
-    const validity = yield* checkCredentialValidity();
-    if (!validity.valid) {
-      return yield* Effect.fail(new Error('Credentials invalid. Please re-login.'));
-    }
-
-    // Make API request with full conversation history
+    // Make API request with full conversation history.
+    // authenticatedFetch will surface InvalidCredentialsError or TokenRefreshError
+    // on credential problems — no need to pre-check validity manually.
     const response = yield* authenticatedFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2048, messages: conversation.getMessages() })
-    });
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: getDefaultModel(), max_tokens: 2048, messages: conversation.getMessages() })
+    }).pipe(Effect.mapError(e => new Error(String(e))));
 
     if (!response.ok) {
       const errorText = yield* Effect.tryPromise({
         try: () => response.text(),
         catch: () => new Error('Failed to read error')
-      });
+      }).pipe(Effect.mapError(e => new Error(String(e))));
       return yield* Effect.fail(new Error(`API error: ${errorText}`));
     }
 
     const data = yield* Effect.tryPromise({
       try: () => response.json() as Promise<ChatResponse>,
       catch: () => new Error('Failed to parse JSON')
-    });
+    }).pipe(Effect.mapError(e => new Error(String(e))));
 
     const assistantMessage = data.content[0]?.text ?? '';
 

@@ -3,7 +3,7 @@
 // reference: src/plugin.ts, src/opencode.ts
 
 import { Effect } from 'effect';
-import { AnthropicUserAgentPlugin, authenticatedFetch, exportToEnvironment } from '../src/index.ts';
+import { AnthropicUserAgentPlugin, authenticatedFetch, exportToEnvironment, getDefaultModel } from '../src/index.ts';
 
 const setupPlugin = Effect.tryPromise({
   try: () => AnthropicUserAgentPlugin(),
@@ -46,7 +46,7 @@ const main = Effect.gen(function*() {
     method: 'POST',
     headers: { 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: model ?? 'claude-sonnet-4-20250514',
+      model: model ?? getDefaultModel(),
       max_tokens: 64,
       messages: [{ role: 'user', content: 'Say "Hello from OpenCode setup" in one sentence.' }]
     })

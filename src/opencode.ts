@@ -71,7 +71,7 @@ export const exportToEnvironment = (): Effect.Effect<void, StorageError | Error>
     }
 
     yield* Effect.logInfo('Credentials exported to environment');
-    yield* Effect.logDebug(`ANTHROPIC_API_KEY=${config.apiKey.slice(0, 8)}...`);
+    yield* Effect.logDebug('ANTHROPIC_API_KEY=[REDACTED]');
     yield* Effect.logDebug(`OPENCODE_PROVIDER=${config.provider}`);
     yield* Effect.logDebug(`OPENCODE_MODEL=${config.model ?? 'default'}`);
   });

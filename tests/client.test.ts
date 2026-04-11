@@ -96,8 +96,8 @@ describe('authenticatedFetch — API key credentials', () => {
     await Effect.runPromise(authenticatedFetch('https://api.anthropic.com/v1/messages'));
     const betas = capturedHeaders!.get('anthropic-beta')!.split(',');
     expect(betas).toContain('oauth-2025-04-20');
-    // interleaved-thinking is opt-in — should NOT be present by default
-    expect(betas).not.toContain('interleaved-thinking-2025-05-14');
+    // interleaved-thinking is now always-on (part of REQUIRED_BETAS)
+    expect(betas).toContain('interleaved-thinking-2025-05-14');
   });
 
   test('does NOT add ?beta=true for API key path', async () => {
@@ -223,10 +223,10 @@ describe('authenticatedFetch — OAuth credentials', () => {
     // Use the exact OPENCODE_IDENTITY string that sanitizeSystemText looks for,
     // plus an extra block that should survive sanitization.
     const body = JSON.stringify({
-      system: [
-        { type: 'text', text: 'You are OpenCode, the best coding agent on the planet.' },
-        { type: 'text', text: 'Additional instructions here.' }
-      ]
+      system: [{ type: 'text', text: 'You are OpenCode, the best coding agent on the planet.' }, {
+        type: 'text',
+        text: 'Additional instructions here.'
+      }]
     });
 
     await Effect.runPromise(

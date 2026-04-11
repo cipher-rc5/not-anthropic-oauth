@@ -167,23 +167,28 @@ See [docs/OPENCODE_INTEGRATION.md](./docs/OPENCODE_INTEGRATION.md) for the detai
 ```bash
 bun run dev       # Interactive CLI
 bun run sync      # Sync credentials to OpenCode
+bun run build     # Bundle to dist/ (target: bun)
 bun run typecheck # Type checking (TypeScript 6.0)
 bun run format    # Auto-format with dprint
 bun run lint      # Typecheck + format check
+bun run ci        # Full CI gate: lint + test + build
 ```
 
 ### Project Structure
 
 ```
 src/
-├── types.ts     # Domain types and constants
-├── errors.ts    # Tagged error definitions
+├── types.ts     # Domain types, constants, env helpers
+├── errors.ts    # Tagged error definitions (8 classes)
 ├── pkce.ts      # PKCE challenge generation
 ├── token.ts     # OAuth token operations
 ├── store.ts     # Credential storage (Bun APIs)
+├── cch.ts       # Content Consistency Hashing (billing header)
+├── utils.ts     # Header merging, URL rewriting, stream stripping
 ├── client.ts    # Authenticated fetch with auto-refresh
 ├── service.ts   # High-level service API
-├── opencode.ts  # OpenCode integration
+├── opencode.ts  # OpenCode integration helpers
+├── plugin.ts    # OpenCode server plugin + legacy fetch patcher
 └── index.ts     # Public exports
 ```
 
@@ -230,7 +235,14 @@ const response = await Effect.runPromise(authenticatedFetch(url, init));
 ### OpenCode Integration
 
 ```typescript
-import { checkCredentialValidity, exportToEnvironment, getOpenCodeConfig } from 'anthropic-oauth';
+import {
+  checkCredentialValidity,
+  exportToEnvironment,
+  generateOpenCodeConfigFile,
+  getDefaultModel,
+  getOpenCodeConfig,
+  writeOpenCodeConfig
+} from 'anthropic-oauth';
 
 // Get config object
 const config = await Effect.runPromise(getOpenCodeConfig());
@@ -240,6 +252,35 @@ await Effect.runPromise(exportToEnvironment());
 
 // Check if valid
 const { valid, expiresIn } = await Effect.runPromise(checkCredentialValidity());
+
+// Write .opencode/config.json
+await Effect.runPromise(writeOpenCodeConfig());
+
+// Get default model (respects ANTHROPIC_DEFAULT_MODEL env var)
+const model = getDefaultModel(); // 'claude-sonnet-4-20250514'
+```
+
+### OpenCode Server Plugin
+
+```typescript
+// anthropic-oauth/server (or anthropic-oauth/plugin)
+import AnthropicOAuthPlugin from 'anthropic-oauth/server';
+
+// Used as an OpenCode plugin — opencode calls: await plugin(input)
+export default AnthropicOAuthPlugin;
+```
+
+### Utility Types & Guards
+
+```typescript
+import type { AuthenticatedFetchOptions } from 'anthropic-oauth';
+import { isCredentials } from 'anthropic-oauth';
+
+// Type guard for stored credential JSON
+const raw = JSON.parse(await Bun.file('creds.json').text());
+if (isCredentials(raw)) {
+  // raw is Credentials (OAuthCredentials | ApiKeyCredentials)
+}
 ```
 
 ## Troubleshooting

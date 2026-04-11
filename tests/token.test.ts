@@ -14,17 +14,23 @@ import { createApiKey, exchangeCode, refreshAccessToken } from '../src/token.ts'
 
 type FetchFn = typeof globalThis.fetch;
 
-// Cast is required: Bun's FetchFn includes a `preconnect` property that plain
-// async functions don't carry. The cast is safe here because tests only use
-// the call signature and never invoke preconnect.
+/**
+ * Cast an async function to FetchFn.
+ *
+ * Bun's FetchFn type includes a `preconnect` property that plain async
+ * functions don't carry. This cast is safe here because tests only use the
+ * call signature and never invoke preconnect.
+ */
+const toFetch = (fn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): FetchFn => fn as FetchFn;
+
 const makeMockFetch = (responses: Array<Response | Error>): FetchFn => {
   let call = 0;
-  return (async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+  return toFetch(async (_input, _init) => {
     const item = responses[call++];
     if (!item) throw new Error('Unexpected extra fetch call');
     if (item instanceof Error) throw item;
     return item;
-  }) as FetchFn;
+  });
 };
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -66,10 +72,10 @@ describe('exchangeCode', () => {
 
   test('strips the state fragment from code before sending', async () => {
     let sentBody: string | null = null;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    globalThis.fetch = toFetch(async (_input, init) => {
       sentBody = typeof init?.body === 'string' ? init.body : null;
       return jsonResponse(VALID_RESPONSE);
-    }) as FetchFn;
+    });
 
     await Effect.runPromise(exchangeCode('cleancode#stateval', 'ver'));
     expect(sentBody).not.toBeNull();
@@ -101,11 +107,11 @@ describe('exchangeCode', () => {
 
   test('retries on 5xx and succeeds on subsequent attempt', async () => {
     let callCount = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
+    globalThis.fetch = toFetch(async () => {
       callCount++;
       if (callCount < 2) return textResponse('server error', 500);
       return jsonResponse(VALID_RESPONSE);
-    }) as unknown as FetchFn;
+    });
 
     const creds = await Effect.runPromise(exchangeCode('code', 'ver'));
     expect(creds.access).toBe('acc-token');
@@ -113,7 +119,7 @@ describe('exchangeCode', () => {
   });
 
   test('fails with TokenExchangeError after exhausting retries on 5xx', async () => {
-    globalThis.fetch = (async (): Promise<Response> => textResponse('server error', 500)) as unknown as FetchFn;
+    globalThis.fetch = toFetch(async () => textResponse('server error', 500));
 
     const result = await Effect.runPromise(exchangeCode('code', 'ver').pipe(Effect.either));
     expect(result._tag).toBe('Left');
@@ -123,9 +129,9 @@ describe('exchangeCode', () => {
   });
 
   test('fails with TokenExchangeError on network failure', async () => {
-    globalThis.fetch = (async (): Promise<Response> => {
+    globalThis.fetch = toFetch(async () => {
       throw new Error('Network unreachable');
-    }) as unknown as FetchFn;
+    });
 
     const result = await Effect.runPromise(exchangeCode('code', 'ver').pipe(Effect.either));
     expect(result._tag).toBe('Left');
@@ -154,10 +160,10 @@ describe('refreshAccessToken', () => {
 
   test('sends grant_type=refresh_token in body', async () => {
     let sentBody: string | null = null;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    globalThis.fetch = toFetch(async (_input, init) => {
       sentBody = typeof init?.body === 'string' ? init.body : null;
       return jsonResponse(VALID_RESPONSE);
-    }) as FetchFn;
+    });
 
     await Effect.runPromise(refreshAccessToken('tok'));
     const params = new URLSearchParams(sentBody!);
@@ -188,10 +194,10 @@ describe('refreshAccessToken', () => {
 
   test('retries once on 500 and succeeds', async () => {
     let calls = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
+    globalThis.fetch = toFetch(async () => {
       calls++;
       return calls === 1 ? textResponse('error', 500) : jsonResponse(VALID_RESPONSE);
-    }) as unknown as FetchFn;
+    });
 
     const creds = await Effect.runPromise(refreshAccessToken('tok'));
     expect(creds.access).toBe('new-acc');
@@ -214,11 +220,11 @@ describe('createApiKey', () => {
 
   test('sends Authorization Bearer header', async () => {
     let authHeader: string | null = null;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    globalThis.fetch = toFetch(async (_input, init) => {
       const headers = new Headers(init?.headers);
       authHeader = headers.get('authorization');
       return new Response(JSON.stringify({ raw_key: 'sk-ant-x' }), { status: 200 });
-    }) as FetchFn;
+    });
 
     await Effect.runPromise(createApiKey('my-access-token'));
     expect(authHeader!).toBe('Bearer my-access-token');
@@ -247,12 +253,12 @@ describe('createApiKey', () => {
 
   test('retries on 500 and succeeds', async () => {
     let calls = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
+    globalThis.fetch = toFetch(async () => {
       calls++;
       return calls === 1 ?
         new Response('error', { status: 500 }) :
         new Response(JSON.stringify({ raw_key: 'sk-ant-retry' }), { status: 200 });
-    }) as unknown as FetchFn;
+    });
 
     const creds = await Effect.runPromise(createApiKey('tok'));
     expect(creds.key).toBe('sk-ant-retry');

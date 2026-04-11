@@ -22,3 +22,6 @@ export class StorageError
 
 export class InvalidCredentialsError
   extends Data.TaggedError('InvalidCredentialsError')<{ readonly message: string }> {}
+
+export class NetworkError
+  extends Data.TaggedError('NetworkError')<{ readonly message: string, readonly cause: unknown }> {}

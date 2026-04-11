@@ -65,7 +65,7 @@ x-api-key: sk-ant-api03...
 
 Anthropic's API requires specific user-agent headers. Two options:
 
-**Option 1: Use authenticatedFetch (Recommended)**
+**Option 1: Use `authenticatedFetch` (Recommended)**
 
 ```typescript
 import { authenticatedFetch } from 'anthropic-oauth';
@@ -84,25 +84,31 @@ const response = await Effect.runPromise(
 );
 ```
 
-**Option 2: Patch Global Fetch (OpenCode Plugin)**
+**Option 2: Use the default export server plugin (OpenCode plugin API)**
+
+```typescript
+import AnthropicOAuthPlugin from 'anthropic-oauth';
+// or: import AnthropicOAuthPlugin from 'anthropic-oauth/server';
+
+// opencode calls this as: await plugin(input)
+export default AnthropicOAuthPlugin;
+```
+
+This plugin handles full OAuth routing: swaps `x-api-key` for `Authorization: Bearer`, appends
+`?beta=true`, strips `mcp_` prefixes from streaming responses, and exposes an OAuth login method
+in OpenCode's provider auth UI.
+
+**Option 3: Patch global fetch (legacy — deprecated)**
 
 ```typescript
 import { AnthropicUserAgentPlugin } from 'anthropic-oauth';
 
-// Call once at app startup
+// @deprecated — use the default export plugin above for full OAuth routing
 await AnthropicUserAgentPlugin();
-
-// All fetch calls to Anthropic endpoints now have the correct user-agent
-const response = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
-  headers: { 'x-api-key': process.env['ANTHROPIC_API_KEY'], 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: 'Hello!' }]
-  })
-});
 ```
+
+This only injects the user-agent into global fetch calls targeting Anthropic hosts. It does not
+handle OAuth token injection, URL rewriting, or streaming transformations.
 
 **Custom user-agent override:**
 
@@ -151,11 +157,16 @@ The `bun run sync` command (`bin/sync-to-opencode.ts`):
 
 Effect-based wrapper around `fetch` that:
 
-- Injects `Authorization: Bearer` (OAuth) or `x-api-key` (API key) automatically
-- Refreshes expired OAuth tokens transparently
+- Injects `authorization: Bearer` (OAuth) or `x-api-key` (API key) automatically
+- Refreshes expired OAuth tokens transparently (with concurrent-refresh deduplication)
+- Computes and injects the CCH billing header into the system prompt
+- Prepends the Claude Code identity block to `system[]`
+- Sanitizes system prompts that reference OpenCode branding
+- Relocates non-identity system blocks to the first user message (required by OAuth endpoint)
+- Prefixes tool definitions and `tool_use` blocks with `mcp_`
 - Appends `?beta=true` to `/v1/messages` for OAuth requests
-- Prefixes tool names with `mcp_` in the request body
-- Sanitizes system prompts that reference OpenCode
+- Strips `mcp_` prefixes from tool names in streaming responses
+- Retries on 429 with Retry-After / exponential backoff (up to 3 attempts)
 
 ```typescript
 import { authenticatedFetch } from 'anthropic-oauth';
@@ -179,14 +190,25 @@ const program = Effect.gen(function*() {
 const result = await Effect.runPromise(program);
 ```
 
-### `AnthropicUserAgentPlugin()`
+**Type signature:**
 
-Patches `globalThis.fetch` to inject user-agent for Anthropic API calls.
+```typescript
+authenticatedFetch(
+  input: RequestInfo | URL,
+  init?: AuthenticatedFetchOptions
+): Effect.Effect<Response, InvalidCredentialsError | NetworkError | TokenRefreshError | StorageError>
+```
+
+### `AnthropicUserAgentPlugin()` (deprecated)
+
+> **Deprecated**: Use the default export server plugin instead for full OAuth routing.
+
+Patches `globalThis.fetch` to inject a user-agent for Anthropic API calls.
 
 ```typescript
 import { AnthropicUserAgentPlugin } from 'anthropic-oauth';
 
-// Call once at startup
+// @deprecated
 await AnthropicUserAgentPlugin();
 ```
 
@@ -203,15 +225,21 @@ Exports credentials as environment variables for OpenCode.
 
 **Sets:**
 
-- `ANTHROPIC_API_KEY` - Access token or API key
-- `OPENCODE_PROVIDER` - Set to `"anthropic"`
-- `OPENCODE_MODEL` - Set to `"claude-sonnet-4-20250514"` (or `ANTHROPIC_DEFAULT_MODEL` env var)
+- `ANTHROPIC_API_KEY` — Access token or API key
+- `OPENCODE_PROVIDER` — Set to `"anthropic"`
+- `OPENCODE_MODEL` — Set to `"claude-sonnet-4-20250514"` (or `ANTHROPIC_DEFAULT_MODEL` env var)
 
 ```typescript
 import { exportToEnvironment } from 'anthropic-oauth';
 import { Effect } from 'effect';
 
 await Effect.runPromise(exportToEnvironment());
+```
+
+**Type signature:**
+
+```typescript
+exportToEnvironment(): Effect.Effect<void, StorageError | Error>
 ```
 
 ### `getOpenCodeConfig(model?)`
@@ -222,7 +250,7 @@ Returns an OpenCode-compatible configuration object.
 {
   apiKey: string;
   provider: 'anthropic';
-  model: string;
+  model?: string;
 }
 ```
 
@@ -232,6 +260,60 @@ import { Effect } from 'effect';
 
 const config = await Effect.runPromise(getOpenCodeConfig());
 // { apiKey: 'sk-ant-...', provider: 'anthropic', model: 'claude-sonnet-4-20250514' }
+```
+
+**Type signature:**
+
+```typescript
+getOpenCodeConfig(model?: string): Effect.Effect<OpenCodeConfig, StorageError | Error>
+```
+
+### `checkCredentialValidity()`
+
+Checks if stored credentials are still valid.
+
+**Type signature:**
+
+```typescript
+checkCredentialValidity(): Effect.Effect<{ valid: boolean, expiresIn?: number }, StorageError | Error>
+```
+
+### `writeOpenCodeConfig(path?)`
+
+Writes OpenCode configuration to a JSON file.
+
+```typescript
+import { writeOpenCodeConfig } from 'anthropic-oauth';
+import { Effect } from 'effect';
+
+await Effect.runPromise(writeOpenCodeConfig()); // defaults to .opencode/config.json
+```
+
+**Type signature:**
+
+```typescript
+writeOpenCodeConfig(path?: string): Effect.Effect<void, StorageError | Error>
+// default path: '.opencode/config.json'
+```
+
+### `generateOpenCodeConfigFile()`
+
+Generates the OpenCode configuration file content as a JSON string (without writing to disk).
+
+**Type signature:**
+
+```typescript
+generateOpenCodeConfigFile(): Effect.Effect<string, StorageError | Error>
+```
+
+### `getDefaultModel()`
+
+Returns the default model string, respecting the `ANTHROPIC_DEFAULT_MODEL` env var.
+
+```typescript
+import { getDefaultModel } from 'anthropic-oauth';
+
+const model = getDefaultModel(); // 'claude-sonnet-4-20250514' or env override
 ```
 
 ## Troubleshooting
@@ -254,10 +336,10 @@ const config = await Effect.runPromise(getOpenCodeConfig());
 
 ### User-agent issues (403 errors)
 
-**Solution**: Use `authenticatedFetch` (which sets `claude-cli/2.1.2` automatically), or:
+**Solution**: Use `authenticatedFetch` (which sets `claude-cli/2.1.87 (external, cli)` automatically), or:
 
 ```bash
-export ANTHROPIC_USER_AGENT='claude-cli/2.1.2'
+export ANTHROPIC_USER_AGENT='claude-cli/2.1.87 (external, cli)'
 ```
 
 ### Credentials not persisting across OpenCode restarts
@@ -268,6 +350,7 @@ The sync is a one-shot write — it does not watch for changes.
 ## Security Notes
 
 - Credentials stored at `~/.config/anthropic-oauth/credentials.json` with `0600` permissions
+- Atomic write (temp file + rename) eliminates the TOCTOU race window
 - API keys displayed with max 8 characters in the CLI: `sk-ant-o...`
 - OAuth tokens auto-refresh before expiry (4-hour lifetime)
 - The sync script only updates the `anthropic` key in OpenCode's auth.json — other providers are preserved

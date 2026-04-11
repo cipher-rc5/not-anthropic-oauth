@@ -44,7 +44,7 @@ Comprehensive guide for syncing OAuth credentials to OpenCode:
 
 Details on critical OAuth authentication fixes:
 
-- User-agent spoofing (`claude-cli/2.1.2`)
+- User-agent spoofing (`claude-cli/2.1.87 (external, cli)`)
 - RFC 6749 compliance (form-urlencoded)
 - Beta headers and request transformations
 - Implementation notes and references
@@ -108,7 +108,7 @@ FAQ and common questions with detailed answers
 | Issue                          | Solution                                                            |
 | ------------------------------ | ------------------------------------------------------------------- |
 | "x-api-key header is required" | [OpenCode Integration](./OPENCODE_INTEGRATION.md#troubleshooting)   |
-| 429 rate limiting              | [OAuth Patches](./OAUTH_PATCHES.md#user-agent-spoofing)             |
+| 429 rate limiting              | [OAuth Patches](./OAUTH_PATCHES.md#1-user-agent-spoofing)           |
 | Token expired                  | [Architecture - Token Lifecycle](./ARCHITECTURE.md#token-lifecycle) |
 | Invalid credentials            | [Setup Guide](./SETUP_SUMMARY.md)                                   |
 | Wrong OpenCode version         | [Version Downgrade](./VERSION_DOWNGRADE.md)                         |
@@ -124,7 +124,8 @@ docs/
 ├── SETUP_SUMMARY.md             # Initial setup instructions
 ├── OPENCODE_USAGE.md            # OpenCode usage reference
 ├── VERSION_DOWNGRADE.md         # Pinning OpenCode to v1.2.27
-└── QUESTIONS_ANSWERED.md        # FAQ and Q&A
+├── QUESTIONS_ANSWERED.md        # FAQ and Q&A
+└── prod-ready.md                # Production readiness analysis
 ```
 
 ## Contributing to Documentation
