@@ -4,7 +4,6 @@
 //              to route and verify OAuth subscription traffic.
 // reference: https://github.com/ex-machina-co/opencode-anthropic-auth
 
-import { createHash } from 'node:crypto';
 import { CCH_POSITIONS, CCH_SALT, CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_VERSION } from './types.ts';
 
 export interface CchMessage {
@@ -38,7 +37,7 @@ export const extractFirstUserMessageText = (messages: readonly CchMessage[]): st
  * Compute cch: first 5 hex characters of SHA-256(messageText).
  */
 export const computeCCH = (messageText: string): string =>
-  createHash('sha256').update(messageText).digest('hex').slice(0, 5);
+  new Bun.CryptoHasher('sha256').update(messageText).digest('hex').slice(0, 5);
 
 /**
  * Compute the 3-char version suffix from sampled positions in the message text.
@@ -46,7 +45,7 @@ export const computeCCH = (messageText: string): string =>
  */
 export const computeVersionSuffix = (messageText: string, version: string = CLAUDE_CODE_VERSION): string => {
   const chars = CCH_POSITIONS.map(i => messageText[i] ?? '0').join('');
-  return createHash('sha256').update(`${CCH_SALT}${chars}${version}`).digest('hex').slice(0, 3);
+  return new Bun.CryptoHasher('sha256').update(`${CCH_SALT}${chars}${version}`).digest('hex').slice(0, 3);
 };
 
 /**
