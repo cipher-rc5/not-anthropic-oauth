@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Effect, Logger, LogLevel } from 'effect';
 import { checkCredentialValidity, exportToEnvironment, getDefaultModel, getOpenCodeConfig } from '../src/opencode.ts';
-import { saveCredentials } from '../src/store.ts';
+import { clearCredentials, saveCredentials } from '../src/store.ts';
 import type { Credentials } from '../src/types.ts';
 
 const TMP_HOME = `/tmp/anthropic-oauth-opencode-test-${process.pid}`;
@@ -14,6 +14,8 @@ const TMP_HOME = `/tmp/anthropic-oauth-opencode-test-${process.pid}`;
 beforeEach(async () => {
   process.env['HOME'] = TMP_HOME;
   await Bun.$`mkdir -p ${TMP_HOME}/.config/anthropic-oauth`.quiet();
+  // Flush module-level credential cache between tests
+  await Effect.runPromise(clearCredentials);
 });
 
 afterEach(async () => {

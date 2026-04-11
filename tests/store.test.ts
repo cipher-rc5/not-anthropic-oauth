@@ -69,6 +69,10 @@ describe('credential store', () => {
   beforeEach(async () => {
     process.env['HOME'] = TMP_HOME;
     await Bun.$`mkdir -p ${TMP_HOME}/.config/anthropic-oauth`.quiet();
+    // Flush the module-level in-memory cache so each test starts cold.
+    // Without this, saveCredentials in one test leaves a warm cache that
+    // causes subsequent tests (expecting None) to read stale data.
+    await Effect.runPromise(clearCredentials);
   });
 
   afterEach(async () => {

@@ -6,7 +6,7 @@ import { generatePKCE } from '@openauthjs/openauth/pkce';
 import { Effect } from 'effect';
 import { AuthorizationUrlError, PkceGenerationError } from './errors.ts';
 import type { AuthMode, PkceChallenge } from './types.ts';
-import { getClientId } from './types.ts';
+import { getClientId, OAUTH_REDIRECT_URI } from './types.ts';
 
 export const generateChallenge: Effect.Effect<PkceChallenge, PkceGenerationError> = Effect.tryPromise({
   try: () => generatePKCE(),
@@ -19,14 +19,17 @@ export const buildAuthorizationUrl = (
 ): Effect.Effect<string, AuthorizationUrlError> =>
   Effect.try({
     try: () => {
-      const base = mode === 'console' ? 'https://console.anthropic.com' : 'https://claude.ai';
+      const base = mode === 'console' ? 'https://platform.claude.com' : 'https://claude.ai';
 
       const url = new URL(`${base}/oauth/authorize`);
       url.searchParams.set('code', 'true');
       url.searchParams.set('client_id', getClientId());
       url.searchParams.set('response_type', 'code');
-      url.searchParams.set('redirect_uri', 'https://console.anthropic.com/oauth/code/callback');
-      url.searchParams.set('scope', 'org:create_api_key user:profile user:inference');
+      url.searchParams.set('redirect_uri', OAUTH_REDIRECT_URI);
+      url.searchParams.set(
+        'scope',
+        'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'
+      );
       url.searchParams.set('code_challenge', pkce.challenge);
       url.searchParams.set('code_challenge_method', 'S256');
       url.searchParams.set('state', pkce.verifier);

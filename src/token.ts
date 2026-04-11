@@ -6,11 +6,7 @@
 import { Effect } from 'effect';
 import { ApiKeyCreationError, TokenExchangeError, TokenRefreshError } from './errors.ts';
 import type { ApiKeyCredentials, OAuthCredentials, TokenResponse } from './types.ts';
-import { ANTHROPIC_OAUTH_URL, getClientId } from './types.ts';
-
-// Anthropic OAuth endpoints require claude-cli user-agent to avoid 429 errors
-// Reference: https://github.com/anomalyco/opencode/issues/18329
-const OAUTH_USER_AGENT = 'claude-cli/2.1.2';
+import { ANTHROPIC_OAUTH_URL, getClientId, getUserAgent, OAUTH_REDIRECT_URI } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Typed response guards — prevents unsafe `as T` casts on JSON.parse results
@@ -52,7 +48,7 @@ const fetchWithRetry = async (
   opts: RetryOptions = DEFAULT_RETRY
 ): Promise<Response> => {
   let lastError: unknown;
-  for (let attempt = 0; attempt < opts.maxAttempts; attempt++) {
+  for (let attempt = 0;attempt < opts.maxAttempts;attempt++) {
     if (attempt > 0) {
       // 2^(attempt-1) * baseDelayMs: 250ms, 500ms, 1000ms, …
       await sleep(opts.baseDelayMs * Math.pow(2, attempt - 1));
@@ -73,9 +69,9 @@ const fetchWithRetry = async (
     } catch (err) {
       clearTimeout(timer);
       // Network-level failure (DNS, connection refused, timeout / abort)
-      lastError = err instanceof Error && err.name === 'AbortError'
-        ? new Error(`Request timed out after ${opts.timeoutMs}ms`)
-        : err;
+      lastError = err instanceof Error && err.name === 'AbortError' ?
+        new Error(`Request timed out after ${opts.timeoutMs}ms`) :
+        err;
     }
   }
   throw lastError;
@@ -110,7 +106,7 @@ export const exchangeCode = (code: string, verifier: string): Effect.Effect<OAut
       code: clean,
       grant_type: 'authorization_code',
       client_id: getClientId(),
-      redirect_uri: 'https://console.anthropic.com/oauth/code/callback',
+      redirect_uri: OAUTH_REDIRECT_URI,
       code_verifier: verifier
     });
     if (state) params.set('state', state);
@@ -119,7 +115,7 @@ export const exchangeCode = (code: string, verifier: string): Effect.Effect<OAut
       try: () =>
         fetchWithRetry(ANTHROPIC_OAUTH_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': OAUTH_USER_AGENT },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': getUserAgent() },
           body: params.toString()
         }),
       catch: cause => new TokenExchangeError({ status: 0, body: String(cause) })
@@ -156,7 +152,7 @@ export const refreshAccessToken = (refresh_token: string): Effect.Effect<OAuthCr
       try: () =>
         fetchWithRetry(ANTHROPIC_OAUTH_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': OAUTH_USER_AGENT },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': getUserAgent() },
           body: params.toString()
         }),
       catch: cause => new TokenRefreshError({ status: 0, body: String(cause) })
@@ -193,7 +189,7 @@ export const createApiKey = (access_token: string): Effect.Effect<ApiKeyCredenti
           headers: {
             'Content-Type': 'application/json',
             'authorization': `Bearer ${access_token}`,
-            'User-Agent': OAUTH_USER_AGENT
+            'User-Agent': getUserAgent()
           }
         }),
       catch: cause => new ApiKeyCreationError({ status: 0, body: String(cause) })

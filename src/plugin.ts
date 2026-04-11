@@ -13,26 +13,28 @@
 // note: opencode v1.2.27 calls the default export directly as plugin(input) — the export
 //       must be the server function itself, not an object with a server property.
 
+import { createStrippedStream } from './client.ts';
+import { getBaseUrl, getUserAgent } from './types.ts';
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const CLAUDE_CLI_USER_AGENT = 'claude-cli/2.1.2';
 const MESSAGES_PATH = '/v1/messages';
 
 // ---------------------------------------------------------------------------
 // Legacy fetch-patch (backwards compat — used by AnthropicUserAgentPlugin)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_USER_AGENT =
+const WEB_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15';
 
 const ANTHROPIC_HOSTS = new Set(['api.anthropic.com', 'console.anthropic.com', 'claude.ai']);
 
 const PATCH_SENTINEL = Symbol.for('anthropic-oauth.fetchPatched');
 
-function getUserAgent(): string {
-  return process.env['OPENCODE_ANTHROPIC_USER_AGENT'] ?? DEFAULT_USER_AGENT;
+function getWebUserAgent(): string {
+  return process.env['OPENCODE_ANTHROPIC_USER_AGENT'] ?? WEB_USER_AGENT;
 }
 
 function resolveUrl(input: RequestInfo | URL): URL | null {
@@ -98,7 +100,7 @@ function patchFetch(): void {
     }
 
     const headers = buildHeadersFromInit(input, init);
-    headers.set('user-agent', getUserAgent());
+    headers.set('user-agent', getWebUserAgent());
 
     return originalFetch(input, { ...(init ?? {}), headers });
   };
@@ -140,6 +142,13 @@ function makeOAuthFetch(accessToken: string) {
       return fetch(input, init);
     }
 
+    // Override origin when ANTHROPIC_BASE_URL is set (proxy / test double support)
+    const baseUrl = getBaseUrl();
+    if (baseUrl) {
+      url.protocol = baseUrl.protocol;
+      url.host = baseUrl.host;
+    }
+
     // Append ?beta=true to /v1/messages for OAuth Pro/Max quota routing
     if (url.pathname === MESSAGES_PATH && !url.searchParams.has('beta')) {
       url.searchParams.set('beta', 'true');
@@ -158,10 +167,13 @@ function makeOAuthFetch(accessToken: string) {
 
     headers.delete('x-api-key');
     headers.set('authorization', `Bearer ${accessToken}`);
-    headers.set('user-agent', CLAUDE_CLI_USER_AGENT);
+    headers.set('user-agent', getUserAgent());
 
     const updatedInput = input instanceof Request ? new Request(url.toString(), input) : url.toString();
-    return fetch(updatedInput, { ...(init ?? {}), headers });
+    const response = await fetch(updatedInput, { ...(init ?? {}), headers });
+
+    // Strip mcp_ prefixes from tool names in streaming responses
+    return createStrippedStream(response);
   };
 }
 
@@ -178,17 +190,30 @@ const AnthropicOAuthPlugin = async (_input: unknown) => ({
 
     // Called by opencode to resolve createAnthropic() SDK options when an
     // anthropic credential is stored in auth.json.
-    loader: async (getAuth: () => Promise<{ type: string; access?: string; key?: string } | undefined>) => {
+    // provider (second arg) is passed by newer opencode versions and exposes
+    // the model registry — we zero out costs for OAuth users since usage is
+    // covered by their Pro/Max subscription.
+    loader: async (
+      getAuth: () => Promise<{ type: string, access?: string, key?: string } | undefined>,
+      provider?: { models?: Record<string, { cost: unknown }> }
+    ) => {
       const auth = await getAuth();
 
       if (!auth) return {};
 
       if (auth.type === 'oauth' && auth.access) {
+        // Zero out per-token costs — Pro/Max subscription covers usage
+        if (provider?.models) {
+          for (const model of Object.values(provider.models)) {
+            model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
+          }
+        }
+
         return {
           // apiKey is required by createAnthropic() — our custom fetch never
           // sends it as x-api-key; it sends Authorization: Bearer instead.
           apiKey: auth.access,
-          fetch: makeOAuthFetch(auth.access),
+          fetch: makeOAuthFetch(auth.access)
         };
       }
 
@@ -200,38 +225,31 @@ const AnthropicOAuthPlugin = async (_input: unknown) => ({
     },
 
     // OAuth login method exposed in opencode's provider auth UI
-    methods: [
-      {
-        type: 'oauth' as const,
-        label: 'Login with Claude Pro/Max',
-        authorize: async () => {
-          const { beginOAuth } = await import('./service.ts');
-          const { Effect } = await import('effect');
-          const { url, verifier } = await Effect.runPromise(beginOAuth('max'));
-          return {
-            url,
-            method: 'code' as const,
-            instructions: 'Open the URL in your browser, complete login, then paste the authorization code.',
-            callback: async (code: string) => {
-              const { completeOAuthLogin } = await import('./service.ts');
-              try {
-                const creds = await Effect.runPromise(completeOAuthLogin(code, verifier));
-                if (creds.type !== 'oauth') return { type: 'failed' as const };
-                return {
-                  type: 'success' as const,
-                  access: creds.access,
-                  refresh: creds.refresh,
-                  expires: creds.expires,
-                };
-              } catch {
-                return { type: 'failed' as const };
-              }
-            },
-          };
-        },
-      },
-    ],
-  },
+    methods: [{
+      type: 'oauth' as const,
+      label: 'Login with Claude Pro/Max',
+      authorize: async () => {
+        const { beginOAuth } = await import('./service.ts');
+        const { Effect } = await import('effect');
+        const { url, verifier } = await Effect.runPromise(beginOAuth('max'));
+        return {
+          url,
+          method: 'code' as const,
+          instructions: 'Open the URL in your browser, complete login, then paste the authorization code.',
+          callback: async (code: string) => {
+            const { completeOAuthLogin } = await import('./service.ts');
+            try {
+              const creds = await Effect.runPromise(completeOAuthLogin(code, verifier));
+              if (creds.type !== 'oauth') return { type: 'failed' as const };
+              return { type: 'success' as const, access: creds.access, refresh: creds.refresh, expires: creds.expires };
+            } catch {
+              return { type: 'failed' as const };
+            }
+          }
+        };
+      }
+    }]
+  }
 });
 
 export default AnthropicOAuthPlugin;

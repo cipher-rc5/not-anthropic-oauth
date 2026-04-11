@@ -37,10 +37,10 @@ describe('buildAuthorizationUrl', () => {
     expect(parsed.pathname).toBe('/oauth/authorize');
   });
 
-  test('builds a valid URL for console mode targeting console.anthropic.com', async () => {
+  test('builds a valid URL for console mode targeting platform.claude.com', async () => {
     const url = await Effect.runPromise(buildAuthorizationUrl('console', fakePkce));
     const parsed = new URL(url);
-    expect(parsed.hostname).toBe('console.anthropic.com');
+    expect(parsed.hostname).toBe('platform.claude.com');
     expect(parsed.pathname).toBe('/oauth/authorize');
   });
 
@@ -64,11 +64,11 @@ describe('buildAuthorizationUrl', () => {
     expect(new URL(url).searchParams.get('state')).toBe(fakePkce.verifier);
   });
 
-  test('includes redirect_uri', async () => {
+  test('includes redirect_uri pointing to platform.claude.com', async () => {
     const url = await Effect.runPromise(buildAuthorizationUrl('max', fakePkce));
     const redirectUri = new URL(url).searchParams.get('redirect_uri');
     expect(redirectUri).not.toBeNull();
-    expect(redirectUri).toContain('anthropic.com');
+    expect(redirectUri).toContain('platform.claude.com');
   });
 
   test('includes scope', async () => {
@@ -89,7 +89,7 @@ describe('buildPkceFlow', () => {
 
   test('returns url and verifier for console mode', async () => {
     const result = await Effect.runPromise(buildPkceFlow('console'));
-    expect(new URL(result.url).hostname).toBe('console.anthropic.com');
+    expect(new URL(result.url).hostname).toBe('platform.claude.com');
   });
 
   test('verifier in result matches state param in URL', async () => {

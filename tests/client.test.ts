@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
 import { authenticatedFetch } from '../src/client.ts';
 import { InvalidCredentialsError } from '../src/errors.ts';
-import { saveCredentials } from '../src/store.ts';
+import { clearCredentials, saveCredentials } from '../src/store.ts';
 import type { Credentials } from '../src/types.ts';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +28,8 @@ const makeOk = (body: unknown = {}): Response =>
 beforeEach(async () => {
   process.env['HOME'] = TMP_HOME;
   await Bun.$`mkdir -p ${TMP_HOME}/.config/anthropic-oauth`.quiet();
+  // Flush module-level credential cache between tests
+  await Effect.runPromise(clearCredentials);
   originalFetch = globalThis.fetch;
 });
 
@@ -94,7 +96,8 @@ describe('authenticatedFetch — API key credentials', () => {
     await Effect.runPromise(authenticatedFetch('https://api.anthropic.com/v1/messages'));
     const betas = capturedHeaders!.get('anthropic-beta')!.split(',');
     expect(betas).toContain('oauth-2025-04-20');
-    expect(betas).toContain('interleaved-thinking-2025-05-14');
+    // interleaved-thinking is opt-in — should NOT be present by default
+    expect(betas).not.toContain('interleaved-thinking-2025-05-14');
   });
 
   test('does NOT add ?beta=true for API key path', async () => {
