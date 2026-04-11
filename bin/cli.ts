@@ -81,19 +81,22 @@ const printCredentials = (creds: Credentials | null): void => {
 // Menu
 // ---------------------------------------------------------------------------
 
-const menu = async (): Promise<void> => {
-  process.stdout.write('\nAnthropic OAuth CLI\n');
-  process.stdout.write('-------------------\n');
-  process.stdout.write('1) Login via Claude Pro/Max (OAuth) - For web interface only\n');
-  process.stdout.write('2) Login via Console (creates API key) - For API usage\n');
-  process.stdout.write('3) Enter API key manually - For API usage\n');
-  process.stdout.write('4) Show stored credentials\n');
-  process.stdout.write('5) Test authenticated request\n');
-  process.stdout.write('6) Logout\n');
-  process.stdout.write('0) Exit\n');
-  process.stdout.write('\nNote: Options 2 or 3 required for /v1/messages API\n');
+const runMenu = async (): Promise<void> => {
+  // Iterative loop — avoids unbounded call-stack growth from self-recursion
+  // on platforms or long-running sessions where the stack depth would matter.
+  while (true) {
+    process.stdout.write('\nAnthropic OAuth CLI\n');
+    process.stdout.write('-------------------\n');
+    process.stdout.write('1) Login via Claude Pro/Max (OAuth) - For web interface only\n');
+    process.stdout.write('2) Login via Console (creates API key) - For API usage\n');
+    process.stdout.write('3) Enter API key manually - For API usage\n');
+    process.stdout.write('4) Show stored credentials\n');
+    process.stdout.write('5) Test authenticated request\n');
+    process.stdout.write('6) Logout\n');
+    process.stdout.write('0) Exit\n');
+    process.stdout.write('\nNote: Options 2 or 3 required for /v1/messages API\n');
 
-  const choice = await ask('\nChoice:');
+    const choice = await ask('\nChoice:');
 
   switch (choice) {
     case '1': {
@@ -264,8 +267,7 @@ const menu = async (): Promise<void> => {
     default:
       process.stdout.write('Unknown option.\n');
   }
-
-  await menu();
+  } // end while
 };
 
-await menu();
+await runMenu();
