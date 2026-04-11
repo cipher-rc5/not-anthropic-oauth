@@ -31,10 +31,7 @@ const mergeBetaHeaders = (existing: string | null): string => {
 // Auth header injection
 // ---------------------------------------------------------------------------
 
-const buildHeaders = (
-  source: HeadersInit | undefined,
-  credentials: Credentials,
-): Headers => {
+const buildHeaders = (source: HeadersInit | undefined, credentials: Credentials): Headers => {
   const headers = mergeHeadersFromInit(source !== undefined ? { headers: source } : undefined);
 
   if (credentials.type === 'oauth') {
@@ -230,15 +227,13 @@ const transformBody = (raw: string): string => {
   // Everything else is prepended to the first user message as text.
   // Skip this when EXPERIMENTAL_KEEP_SYSTEM_PROMPT=1 is set.
   if (
-    !experimentalKeepSystemPrompt() &&
-    Array.isArray(parsed['system']) &&
-    (parsed['system'] as unknown[]).length > 1
+    !experimentalKeepSystemPrompt() && Array.isArray(parsed['system']) && (parsed['system'] as unknown[]).length > 1
   ) {
     const systemBlocks = parsed['system'] as SystemBlock[];
     const kept = [systemBlocks[0]]; // identity block stays in system[]
     const movedTexts: string[] = [];
 
-    for (let i = 1; i < systemBlocks.length; i++) {
+    for (let i = 1;i < systemBlocks.length;i++) {
       const entry = systemBlocks[i];
       const txt = typeof entry === 'string' ? entry : (entry?.text ?? '');
       if (txt.length > 0) movedTexts.push(txt);

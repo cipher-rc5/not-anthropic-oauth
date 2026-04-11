@@ -109,14 +109,14 @@ bun run lint       # Full lint check passes
 
 Multiple env vars control behaviour:
 
-| Variable                          | Module      | Purpose                                                                 |
-| --------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| Variable                          | Module      | Purpose                                                                              |
+| --------------------------------- | ----------- | ------------------------------------------------------------------------------------ |
 | `ANTHROPIC_USER_AGENT`            | types.ts    | Override `claude-cli/2.1.87 (external, cli)` for `authenticatedFetch` and `token.ts` |
-| `OPENCODE_ANTHROPIC_USER_AGENT`   | plugin.ts   | Override the Safari UA used by the legacy `AnthropicUserAgentPlugin`    |
-| `ANTHROPIC_BASE_URL`              | types.ts    | Redirect all API requests to a proxy/alternative endpoint (http/https)  |
-| `ANTHROPIC_CLIENT_ID`             | types.ts    | Override the default OAuth client ID                                    |
-| `ANTHROPIC_DEFAULT_MODEL`         | opencode.ts | Override the default model used in `getOpenCodeConfig`                  |
-| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to the first user message |
+| `OPENCODE_ANTHROPIC_USER_AGENT`   | plugin.ts   | Override the Safari UA used by the legacy `AnthropicUserAgentPlugin`                 |
+| `ANTHROPIC_BASE_URL`              | types.ts    | Redirect all API requests to a proxy/alternative endpoint (http/https)               |
+| `ANTHROPIC_CLIENT_ID`             | types.ts    | Override the default OAuth client ID                                                 |
+| `ANTHROPIC_DEFAULT_MODEL`         | opencode.ts | Override the default model used in `getOpenCodeConfig`                               |
+| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to the first user message            |
 
 ## Migration Notes
 

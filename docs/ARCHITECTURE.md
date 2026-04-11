@@ -95,20 +95,20 @@ graph TB
 
 ### Module Responsibilities
 
-| Module                | Responsibility                          | Dependencies                      |
-| --------------------- | --------------------------------------- | --------------------------------- |
-| `cli.ts`              | Interactive user interface              | service, Effect                   |
-| `sync-to-opencode.ts` | Sync credentials to OpenCode            | store, Effect                     |
-| `service.ts`          | High-level API facade                   | client, token, store              |
-| `client.ts`           | Authenticated HTTP requests             | token, store, cch, utils, types, errors |
-| `token.ts`            | OAuth token operations                  | types, errors                     |
-| `store.ts`            | Credential persistence                  | types, errors, Bun.file           |
-| `pkce.ts`             | PKCE challenge generation               | @openauthjs/openauth              |
-| `plugin.ts`           | OpenCode server plugin & fetch patcher  | utils, types                      |
-| `cch.ts`              | Content Consistency Hashing (billing header) | types                        |
-| `utils.ts`            | Header merging, URL rewriting, stream stripping | types                     |
-| `types.ts`            | Domain types & constants                | -                                 |
-| `errors.ts`           | Tagged error definitions                | Effect.Data                       |
+| Module                | Responsibility                                  | Dependencies                            |
+| --------------------- | ----------------------------------------------- | --------------------------------------- |
+| `cli.ts`              | Interactive user interface                      | service, Effect                         |
+| `sync-to-opencode.ts` | Sync credentials to OpenCode                    | store, Effect                           |
+| `service.ts`          | High-level API facade                           | client, token, store                    |
+| `client.ts`           | Authenticated HTTP requests                     | token, store, cch, utils, types, errors |
+| `token.ts`            | OAuth token operations                          | types, errors                           |
+| `store.ts`            | Credential persistence                          | types, errors, Bun.file                 |
+| `pkce.ts`             | PKCE challenge generation                       | @openauthjs/openauth                    |
+| `plugin.ts`           | OpenCode server plugin & fetch patcher          | utils, types                            |
+| `cch.ts`              | Content Consistency Hashing (billing header)    | types                                   |
+| `utils.ts`            | Header merging, URL rewriting, stream stripping | types                                   |
+| `types.ts`            | Domain types & constants                        | -                                       |
+| `errors.ts`           | Tagged error definitions                        | Effect.Data                             |
 
 ---
 
@@ -643,14 +643,14 @@ Each module has one clear purpose, making the codebase easy to navigate and main
 
 ## Environment Variables
 
-| Variable                        | Module        | Purpose                                                      |
-| ------------------------------- | ------------- | ------------------------------------------------------------ |
-| `ANTHROPIC_USER_AGENT`          | types.ts      | Override the default `claude-cli/2.1.87 (external, cli)` UA |
-| `ANTHROPIC_CLIENT_ID`           | types.ts      | Override the default OAuth client ID                         |
-| `ANTHROPIC_BASE_URL`            | types.ts      | Redirect all API requests to a proxy/alternative endpoint    |
-| `ANTHROPIC_DEFAULT_MODEL`       | opencode.ts   | Override the default model (`claude-sonnet-4-20250514`)      |
-| `OPENCODE_ANTHROPIC_USER_AGENT` | plugin.ts     | Override the Safari UA used by `AnthropicUserAgentPlugin`    |
-| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to user msg  |
+| Variable                          | Module      | Purpose                                                     |
+| --------------------------------- | ----------- | ----------------------------------------------------------- |
+| `ANTHROPIC_USER_AGENT`            | types.ts    | Override the default `claude-cli/2.1.87 (external, cli)` UA |
+| `ANTHROPIC_CLIENT_ID`             | types.ts    | Override the default OAuth client ID                        |
+| `ANTHROPIC_BASE_URL`              | types.ts    | Redirect all API requests to a proxy/alternative endpoint   |
+| `ANTHROPIC_DEFAULT_MODEL`         | opencode.ts | Override the default model (`claude-sonnet-4-20250514`)     |
+| `OPENCODE_ANTHROPIC_USER_AGENT`   | plugin.ts   | Override the Safari UA used by `AnthropicUserAgentPlugin`   |
+| `EXPERIMENTAL_KEEP_SYSTEM_PROMPT` | types.ts    | Set `1`/`true` to skip relocating system blocks to user msg |
 
 ---
 

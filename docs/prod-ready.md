@@ -42,15 +42,15 @@ Production Readiness: 6.5 / 10
 
 ## Score breakdown
 
-| Dimension                      | Score |
-| ------------------------------ | ----- |
-| Type safety                    | 9     |
-| Error handling                 | 8     |
-| Test coverage                  | 7.5   |
-| Security                       | 6     |
-| Publishability / packaging     | 4     |
-| CI/CD & automation             | 2     |
-| Architecture consistency       | 6     |
-| Dependencies                   | 8     |
+| Dimension                  | Score |
+| -------------------------- | ----- |
+| Type safety                | 9     |
+| Error handling             | 8     |
+| Test coverage              | 7.5   |
+| Security                   | 6     |
+| Publishability / packaging | 4     |
+| CI/CD & automation         | 2     |
+| Architecture consistency   | 6     |
+| Dependencies               | 8     |
 
 **Overall: 6.5/10** — Solid internal tooling / prototype quality. The core OAuth logic is well-implemented and the type system usage is above average. The gap to production is primarily packaging, missing CI, and the delta between documented conventions and actual code.

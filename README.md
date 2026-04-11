@@ -235,14 +235,7 @@ const response = await Effect.runPromise(authenticatedFetch(url, init));
 ### OpenCode Integration
 
 ```typescript
-import {
-  checkCredentialValidity,
-  exportToEnvironment,
-  generateOpenCodeConfigFile,
-  getDefaultModel,
-  getOpenCodeConfig,
-  writeOpenCodeConfig
-} from 'anthropic-oauth';
+import { checkCredentialValidity, exportToEnvironment, generateOpenCodeConfigFile, getDefaultModel, getOpenCodeConfig, writeOpenCodeConfig } from 'anthropic-oauth';
 
 // Get config object
 const config = await Effect.runPromise(getOpenCodeConfig());
