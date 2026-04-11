@@ -81,10 +81,14 @@ export const saveCredentials = (credentials: Credentials): Effect.Effect<void, S
       await Bun.$`mkdir -p ${configDir}`.quiet();
 
       const credPath = getCredentialsPath();
-      await Bun.write(credPath, JSON.stringify(credentials, null, 2));
+      const tmpPath = `${credPath}.tmp.${process.pid}`;
 
-      // Restrict to owner read/write only — documentation claimed 0600 but code never set it
-      await Bun.$`chmod 600 ${credPath}`.quiet();
+      // Atomic write: write to a temp file, chmod it, then rename into place.
+      // This eliminates the TOCTOU window where a world-readable file could
+      // be observed between Bun.write and the subsequent chmod.
+      await Bun.write(tmpPath, JSON.stringify(credentials, null, 2));
+      await Bun.$`chmod 600 ${tmpPath}`.quiet();
+      await Bun.$`mv -f ${tmpPath} ${credPath}`.quiet();
 
       // Update cache so subsequent loadCredentials calls don't re-read disk
       credentialCache = Option.some(credentials);
