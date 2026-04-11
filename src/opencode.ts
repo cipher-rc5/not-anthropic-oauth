@@ -4,7 +4,7 @@
 //              so callers can control log formatting via Logger layers.
 // reference: https://opencode.ai/docs/integrations
 
-import { Effect } from 'effect';
+import { Effect, Option } from 'effect';
 
 import { StorageError } from './errors.ts';
 import { getStoredCredentials } from './service.ts';
@@ -47,7 +47,7 @@ export const getOpenCodeConfig = (model?: string): Effect.Effect<OpenCodeConfig,
   Effect.gen(function*() {
     const maybeCredentials = yield* getStoredCredentials;
 
-    if (maybeCredentials._tag === 'None') {
+    if (Option.isNone(maybeCredentials)) {
       return yield* Effect.fail(new Error('No credentials found. Please login first using the CLI.'));
     }
 
@@ -71,7 +71,7 @@ export const exportToEnvironment = (): Effect.Effect<void, StorageError | Error>
     }
 
     yield* Effect.logInfo('Credentials exported to environment');
-    yield* Effect.logDebug(`ANTHROPIC_API_KEY=${config.apiKey.slice(0, 20)}...`);
+    yield* Effect.logDebug(`ANTHROPIC_API_KEY=${config.apiKey.slice(0, 8)}...`);
     yield* Effect.logDebug(`OPENCODE_PROVIDER=${config.provider}`);
     yield* Effect.logDebug(`OPENCODE_MODEL=${config.model ?? 'default'}`);
   });
@@ -120,7 +120,7 @@ export const checkCredentialValidity = (): Effect.Effect<
   Effect.gen(function*() {
     const maybeCredentials = yield* getStoredCredentials;
 
-    if (maybeCredentials._tag === 'None') {
+    if (Option.isNone(maybeCredentials)) {
       return { valid: false };
     }
 
