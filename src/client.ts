@@ -7,7 +7,7 @@
 //              Uses a module-level refresh mutex to prevent concurrent token refresh races.
 // reference: plugin source - auth.loader fetch interceptor
 
-import { Effect, Option } from 'effect';
+import { Duration, Effect, Option } from 'effect';
 import { buildBillingHeaderValue } from './cch.ts';
 import { InvalidCredentialsError, StorageError, TokenRefreshError } from './errors.ts';
 import { loadCredentials, saveCredentials } from './store.ts';
@@ -197,11 +197,12 @@ const prependIdentityBlock = (system: unknown, billingHeader: string | null): Sy
   if (isObject(firstBlock) && typeof firstBlock['text'] === 'string') {
     const existingText: string = firstBlock['text'];
     if (existingText === CLAUDE_CODE_IDENTITY || existingText.endsWith(CLAUDE_CODE_IDENTITY)) {
-      return [{ ...firstBlock, text: identityText } as SystemBlock, ...blocks.slice(1).map(sanitizeBlock)];
+      const rest = blocks.slice(1).map(sanitizeBlock).filter(b => b.text.trim() !== '');
+      return [{ ...firstBlock, text: identityText } as SystemBlock, ...rest];
     }
   }
 
-  return [identityBlock, ...blocks.map(sanitizeBlock)];
+  return [identityBlock, ...blocks.map(sanitizeBlock).filter(b => b.text.trim() !== '')];
 };
 
 // ---------------------------------------------------------------------------
@@ -278,9 +279,20 @@ const transformBody = (raw: string): { body: string, hasThinking: boolean } => {
 // Streaming response — strip mcp_ prefix from tool names
 // ---------------------------------------------------------------------------
 
+// The longest prefix of the pattern that could appear at the end of a chunk
+// and be completed by the next chunk.  We keep this many characters of
+// carry-over so the regex is never split across a chunk boundary.
+// Worst case: `"name":"mcp_` = 13 chars, plus surrounding whitespace variants.
+const STRIP_CARRY_LEN = 32;
+const STRIP_PATTERN = /"name"\s*:\s*"mcp_([^"]+)"/g;
+
 /**
  * Wrap a Response so that `mcp_` prefixes are stripped from tool name fields
  * as the body streams through. Safe to call on non-streaming responses too.
+ *
+ * A carry-over buffer of the last STRIP_CARRY_LEN chars is prepended to each
+ * decoded chunk before matching, then trimmed from the output, ensuring the
+ * pattern is never silently missed when a chunk boundary falls inside a field.
  */
 export const createStrippedStream = (response: Response): Response => {
   if (!response.body) return response;
@@ -288,16 +300,34 @@ export const createStrippedStream = (response: Response): Response => {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  let carry = '';
 
   const stream = new ReadableStream({
     async pull(controller) {
       const { done, value } = await reader.read();
       if (done) {
+        // Flush any remaining carry — strip and emit it.
+        if (carry.length > 0) {
+          controller.enqueue(encoder.encode(carry.replace(STRIP_PATTERN, '"name": "$1"')));
+        }
         controller.close();
         return;
       }
-      const text = decoder.decode(value, { stream: true }).replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
-      controller.enqueue(encoder.encode(text));
+
+      // Prepend carry so the pattern can match across the previous boundary.
+      const raw = carry + decoder.decode(value, { stream: true });
+      const stripped = raw.replace(STRIP_PATTERN, '"name": "$1"');
+
+      // Keep the last STRIP_CARRY_LEN chars as carry for the next chunk,
+      // emit everything before that immediately.
+      if (stripped.length <= STRIP_CARRY_LEN) {
+        carry = stripped;
+        // Nothing safe to emit yet — wait for more data.
+      } else {
+        const safeEnd = stripped.length - STRIP_CARRY_LEN;
+        controller.enqueue(encoder.encode(stripped.slice(0, safeEnd)));
+        carry = stripped.slice(safeEnd);
+      }
     }
   });
 
@@ -423,11 +453,33 @@ export const authenticatedFetch = (
       }
     }
 
-    const response = yield* Effect.tryPromise({
-      try: () => fetch(requestInput, { ...fetchInit, ...(body !== undefined ? { body } : {}), headers }),
-      catch: cause => new InvalidCredentialsError({ message: String(cause) })
-    });
+    const fetchArgs: [RequestInfo | URL, RequestInit] = [
+      requestInput,
+      { ...fetchInit, ...(body !== undefined ? { body } : {}), headers }
+    ];
+
+    // Retry on 429 — respect Retry-After header when present, otherwise use
+    // exponential backoff (1s, 2s, 4s). Three attempts total.
+    const MAX_RATE_LIMIT_RETRIES = 3;
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
+      response = yield* Effect.tryPromise({
+        try: () => fetch(...fetchArgs),
+        catch: cause => new InvalidCredentialsError({ message: String(cause) })
+      });
+
+      if (response.status !== 429) break;
+
+      // Don't wait after the final attempt — just return the 429 to the caller.
+      if (attempt === MAX_RATE_LIMIT_RETRIES - 1) break;
+
+      const retryAfter = response.headers.get('retry-after');
+      const delayMs = retryAfter !== null && /^\d+$/.test(retryAfter) ?
+        parseInt(retryAfter, 10) * 1000 :
+        (1000 * Math.pow(2, attempt)); // 1s, 2s
+      yield* Effect.sleep(Duration.millis(delayMs));
+    }
 
     // Strip mcp_ tool name prefixes from streaming responses (OAuth only)
-    return finalCredentials.type === 'oauth' ? createStrippedStream(response) : response;
+    return finalCredentials.type === 'oauth' ? createStrippedStream(response!) : response!;
   });

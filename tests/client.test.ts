@@ -213,15 +213,20 @@ describe('authenticatedFetch — OAuth credentials', () => {
     expect(parsed.messages[0].content[0].name).toBe('mcp_bash');
   });
 
-  test('sanitizes OpenCode string from system prompt', async () => {
+  test('removes OpenCode identity block and prepends Claude Code identity', async () => {
     let capturedBody: string | null = null;
     globalThis.fetch = (async (_: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       capturedBody = typeof init?.body === 'string' ? init.body : null;
       return makeOk();
     }) as FetchFn;
 
+    // Use the exact OPENCODE_IDENTITY string that sanitizeSystemText looks for,
+    // plus an extra block that should survive sanitization.
     const body = JSON.stringify({
-      system: [{ type: 'text', text: 'You are running inside OpenCode editor by opencode team.' }]
+      system: [
+        { type: 'text', text: 'You are OpenCode, the best coding agent on the planet.' },
+        { type: 'text', text: 'Additional instructions here.' }
+      ]
     });
 
     await Effect.runPromise(
@@ -233,9 +238,13 @@ describe('authenticatedFetch — OAuth credentials', () => {
     );
 
     const parsed = JSON.parse(capturedBody!);
-    const systemText: string = parsed.system[0].text;
-    expect(systemText).not.toContain('OpenCode');
-    expect(systemText).not.toContain('opencode');
+    // system[0] must be the prepended Claude Code identity block
+    expect(parsed.system[0].text).toContain('Claude agent');
+    // The sanitized-empty OpenCode block must be filtered out (no empty text blocks)
+    const allTexts: string[] = parsed.system.map((b: { text: string }) => b.text);
+    expect(allTexts.every(t => t.trim() !== '')).toBe(true);
+    // No block in the final system should mention OpenCode
+    expect(allTexts.join(' ')).not.toContain('OpenCode');
   });
 
   test('passes through non-JSON body unchanged', async () => {
