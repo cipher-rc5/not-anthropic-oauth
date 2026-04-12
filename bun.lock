@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "anthropic-oauth",
+      "name": "not-anthropic-oauth",
       "dependencies": {
         "@openauthjs/openauth": "0.4.3",
         "effect": "3.21.0",
